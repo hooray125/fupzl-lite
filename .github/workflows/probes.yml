@@ -27,9 +27,6 @@ jobs:
     env:
       # Non-sensitive config prefers Variables (vars), then falls back to Secrets, then defaults.
       LITEFUPZL_SITE: ${{ vars.LITEFUPZL_SITE || vars.FUCKPZL_ONESHOT_SITE || secrets.LITEFUPZL_SITE || secrets.FUCKPZL_ONESHOT_SITE || 'linux.do' }}
-      # Sensitive values stay in Secrets only: GitHub masks Secrets in logs but not Variables.
-      LITEFUPZL_COOKIES_JSON: ${{ secrets.LITEFUPZL_COOKIES_JSON || secrets.FUCKPZL_ONESHOT_COOKIES_JSON }}
-      LITEFUPZL_ACTIONS_ADMIN_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN }}
       LITEFUPZL_DURATION_MINUTES: "2"
       LITEFUPZL_HEADLESS: ${{ vars.LITEFUPZL_HEADLESS || vars.FUCKPZL_ONESHOT_HEADLESS || secrets.LITEFUPZL_HEADLESS || secrets.FUCKPZL_ONESHOT_HEADLESS || 'false' }}
       LITEFUPZL_OUTPUT_DIR: ${{ vars.LITEFUPZL_OUTPUT_DIR || vars.FUCKPZL_ONESHOT_OUTPUT_DIR || secrets.LITEFUPZL_OUTPUT_DIR || secrets.FUCKPZL_ONESHOT_OUTPUT_DIR || 'output/litefupzl' }}
@@ -42,10 +39,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
 
@@ -72,9 +69,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
-          pip install proxy.py
+          python -m pip install --require-hashes --only-binary=:all: -r requirements.lock
+          python -m pip install --no-build-isolation --no-deps -e .
           sudo apt-get install -y xvfb
           case "${LITEFUPZL_BROWSER:-camoufox}" in
             patchright-chromium)
@@ -99,12 +95,14 @@ jobs:
           curl -fsSL -x http://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | tee warp-proxy-trace.txt
           grep -q 'warp=on' warp-proxy-trace.txt
 
-      - name: Run selected probe
+      - name: Run authenticated probe
+        if: inputs.probe == 'browser' || inputs.probe == 'auth'
+        env:
+          LITEFUPZL_COOKIES_JSON: ${{ secrets.LITEFUPZL_COOKIES_JSON || secrets.FUCKPZL_ONESHOT_COOKIES_JSON }}
         run: |
           case "${{ inputs.probe }}" in
             browser) target="apps/litefupzl/probe_browser.py" ;;
             auth) target="apps/litefupzl/auth_probe.py" ;;
-            cf) target="apps/litefupzl/cf_probe.py" ;;
             *) echo "Unknown probe: ${{ inputs.probe }}" >&2; exit 1 ;;
           esac
 
@@ -114,9 +112,18 @@ jobs:
             python "$target"
           fi
 
+      - name: Run unauthenticated CF probe
+        if: inputs.probe == 'cf'
+        run: |
+          if [ "${LITEFUPZL_HEADLESS:-true}" = "false" ] && [ "${LITEFUPZL_VIRTUAL_DISPLAY:-true}" != "true" ]; then
+            xvfb-run -a python apps/litefupzl/cf_probe.py
+          else
+            python apps/litefupzl/cf_probe.py
+          fi
+
       - name: Upload redacted artifacts
         if: always() && github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: litefupzl-probe-public-artifacts
           path: |
@@ -129,7 +136,7 @@ jobs:
       - name: Cleanup old workflow runs
         if: always()
         env:
-          ACTIONS_CLEANUP_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN || github.token }}
+          ACTIONS_CLEANUP_TOKEN: ${{ github.token }}
           ACTIONS_RUNS_KEEP: ${{ vars.LITEFUPZL_ACTIONS_RUNS_KEEP || vars.FUCKPZL_ACTIONS_RUNS_KEEP || secrets.LITEFUPZL_ACTIONS_RUNS_KEEP || secrets.FUCKPZL_ACTIONS_RUNS_KEEP || '15' }}
         run: |
           python - <<'PY'

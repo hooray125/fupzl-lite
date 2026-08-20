@@ -15,7 +15,7 @@ write action is the bounded mutual-like pass described below.
 - Per-run never-read topic quota derived from a 30-day target.
 - Optional mutual-like pass for configured usernames.
 - Per-browser `/topics/timings` status diagnostics in redacted logs.
-- Opt-in cookie refresh from the already-authenticated browser context.
+- Default-on cookie refresh from the already-authenticated browser context; set it to `false` to disable write-back.
 - Manual and scheduled runs share the same cookie-refresh switch.
 - GitHub Actions run cleanup with recent-run retention.
 - Artifact upload is disabled by default and must be enabled per manual run.
@@ -42,7 +42,7 @@ LITEFUPZL_BROWSER=camoufox
 LITEFUPZL_PROXY_SERVER=
 LITEFUPZL_VIRTUAL_DISPLAY=true
 LITEFUPZL_OUTPUT_DIR=output/litefupzl
-LITEFUPZL_COOKIE_REFRESH_ENABLED=false
+LITEFUPZL_COOKIE_REFRESH_ENABLED=true
 LITEFUPZL_MUTUAL_LIKE_USERS_JSON=[]
 ```
 
@@ -117,8 +117,9 @@ Multi-account example:
 
 #### `LITEFUPZL_ACTIONS_ADMIN_TOKEN`
 
-Optional. A GitHub token used only when you enable cookie refresh or need
-workflow-run cleanup permissions beyond the default workflow token.
+Optional. A GitHub token used by the default-on cookie refresh path when a
+rotated `_t` must be persisted, or for workflow-run cleanup permissions beyond
+the default workflow token.
 
 Recommended permissions:
 
@@ -268,12 +269,16 @@ Number of recent workflow runs to keep during cleanup. Default: `15`.
 #### `LITEFUPZL_COOKIE_REFRESH_ENABLED`
 
 Cookie refresh switch for local runs and scheduled GitHub Actions runs. Default:
-`false`.
+`true`.
 
-For scheduled GitHub Actions runs, set the repository Variable or Secret
-`LITEFUPZL_COOKIE_REFRESH_ENABLED=true` only when you intentionally want
-same-session cookie write-back. Manual runs use the `cookie_refresh_enabled`
-workflow input for that single run.
+When unset, same-session write-back is enabled. Set the repository Variable
+(preferred) or Secret `LITEFUPZL_COOKIE_REFRESH_ENABLED=false` to disable it for
+scheduled runs. The legacy environment-variable alias remains supported;
+Variables take priority over Secrets.
+
+Manual runs use the `cookie_refresh_enabled` workflow input for that single run.
+An explicit string `false` from the manual input takes priority over repository
+Variables and Secrets.
 
 For local runs, use the same names as environment variables or put them in
 `.env.local`.
@@ -289,11 +294,12 @@ Optional manual runtime override. Leave empty to use
 
 #### `cookie_refresh_enabled`
 
-Default: `false`. Set to `true` only for a manual run where refreshed cookies
-should be written back to `LITEFUPZL_COOKIES_JSON`.
+Default: `true`. Set it to `false` to disable refreshed-cookie write-back for a
+manual run. The explicit string `false` takes priority over any repository
+Variable or Secret configured as `true`.
 
-Scheduled runs do not read this manual input. They use repository secret
-`LITEFUPZL_COOKIE_REFRESH_ENABLED` instead.
+Scheduled runs do not read this manual input. They use repository Variable or
+Secret `LITEFUPZL_COOKIE_REFRESH_ENABLED` (with the legacy alias retained).
 
 #### `cookie_refresh_probe`
 
@@ -313,7 +319,7 @@ Choose one:
 
 - `auth`: verifies authenticated browser-session access.
 - `browser`: runs browser read/timing diagnostics.
-- `cf`: runs the configured challenge probe.
+- `cf`: runs the configured challenge probe in a fresh unauthenticated context and never injects the configured production `_t`.
 
 #### `upload_artifacts`
 
@@ -357,11 +363,9 @@ successful quota.
 
 ## Cookie refresh behavior
 
-Cookie refresh is disabled by default so a normal run cannot replace the
-durable login secret. It remains available as an explicit opt-in.
-
-Manual runs use the `cookie_refresh_enabled` workflow input. Scheduled runs use
-repository Variable or Secret `LITEFUPZL_COOKIE_REFRESH_ENABLED`.
+Cookie refresh is enabled by default. Set `LITEFUPZL_COOKIE_REFRESH_ENABLED=false`
+locally or for scheduled runs, or set the manual `cookie_refresh_enabled` input
+to the string `false`, to disable write-back explicitly.
 
 When enabled, the runner:
 
@@ -370,6 +374,9 @@ When enabled, the runner:
 3. relies on the login proof already completed in that same browser context;
 4. writes the latest durable cookie JSON back to `LITEFUPZL_COOKIES_JSON`.
 
-The runner does not open a second browser with the candidate token. That avoids
-rotating the candidate again and then persisting an already-stale token. If
-extraction or GitHub secret write-back fails, the secret is not updated.
+The durable `_t` can rotate while the authenticated browser context is active,
+which makes the repository's source value stale. The runner therefore must
+extract and persist the latest `_t` from the same context that completed login.
+It does not open a second browser with the candidate token, because that can
+rotate `_t` again and persist an already-stale value. If extraction or GitHub
+secret write-back fails, the secret is not updated.

@@ -95,6 +95,46 @@ def test_unmet_new_topic_target_records_warning():
     assert WarningCode.NEW_TOPIC_TARGET_UNMET.value in result.warning_codes
 
 
+def test_delayed_timings_confirmation_is_reconciled_once():
+    from litefupzl.oneshot.session import _reconcile_confirmed_new_topics
+    from litefupzl.oneshot.timings import TopicTimingsTracker
+
+    tracker = TopicTimingsTracker()
+    tracker.prepare(42)
+    result = SlotResult(
+        slot_index=1,
+        slot_alias="slot-001",
+        started_at=utc_now_iso(),
+        new_topic_target=1,
+    )
+    recorder = _Recorder()
+    eligible = {42}
+    counted = set()
+
+    _reconcile_confirmed_new_topics(
+        eligible_topic_ids=eligible,
+        counted_topic_ids=counted,
+        tracker=tracker,
+        result=result,
+        recorder=recorder,
+    )
+    assert result.new_topics_confirmed == 0
+
+    tracker.observe_response(_Response(42))
+    for _ in range(2):
+        _reconcile_confirmed_new_topics(
+            eligible_topic_ids=eligible,
+            counted_topic_ids=counted,
+            tracker=tracker,
+            result=result,
+            recorder=recorder,
+        )
+
+    assert result.new_topics_confirmed == 1
+    assert counted == {42}
+    assert [event["code"] for event in recorder.events if event["step"] == "new-topic"] == ["COUNT_1_OF_1"]
+
+
 @pytest.mark.asyncio
 async def test_run_slot_counts_only_explicit_unseen_with_matching_timings_200(monkeypatch):
     from litefupzl.oneshot import session

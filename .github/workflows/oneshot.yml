@@ -8,9 +8,9 @@ on:
         required: false
         default: ""
       cookie_refresh_enabled:
-        description: Enable production cookie refresh write-back for this manual run
+        description: Write back refreshed production cookie for this manual run (set false to disable)
         required: false
-        default: "false"
+        default: "true"
       cookie_refresh_probe:
         description: Run a dedicated redacted GitHub secret persistence probe
         required: false
@@ -38,9 +38,6 @@ jobs:
     env:
       # Non-sensitive config prefers Variables (vars), then falls back to Secrets, then defaults.
       LITEFUPZL_SITE: ${{ vars.LITEFUPZL_SITE || vars.FUCKPZL_ONESHOT_SITE || secrets.LITEFUPZL_SITE || secrets.FUCKPZL_ONESHOT_SITE || 'linux.do' }}
-      # Sensitive values stay in Secrets only: GitHub masks Secrets in logs but not Variables.
-      LITEFUPZL_COOKIES_JSON: ${{ secrets.LITEFUPZL_COOKIES_JSON || secrets.FUCKPZL_ONESHOT_COOKIES_JSON }}
-      LITEFUPZL_ACTIONS_ADMIN_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN }}
       LITEFUPZL_DURATION_MINUTES: ${{ github.event_name == 'workflow_dispatch' && inputs.duration_minutes || vars.LITEFUPZL_DURATION_MINUTES || vars.FUCKPZL_ONESHOT_DURATION_MINUTES || secrets.LITEFUPZL_DURATION_MINUTES || secrets.FUCKPZL_ONESHOT_DURATION_MINUTES || '40' }}
       LITEFUPZL_MONTHLY_TOPIC_TARGET: ${{ vars.LITEFUPZL_MONTHLY_TOPIC_TARGET || vars.FUCKPZL_ONESHOT_MONTHLY_TOPIC_TARGET || secrets.LITEFUPZL_MONTHLY_TOPIC_TARGET || secrets.FUCKPZL_ONESHOT_MONTHLY_TOPIC_TARGET || '500' }}
       LITEFUPZL_SCHEDULE_RUNS_PER_DAY: ${{ vars.LITEFUPZL_SCHEDULE_RUNS_PER_DAY || vars.FUCKPZL_ONESHOT_SCHEDULE_RUNS_PER_DAY || secrets.LITEFUPZL_SCHEDULE_RUNS_PER_DAY || secrets.FUCKPZL_ONESHOT_SCHEDULE_RUNS_PER_DAY || '2' }}
@@ -51,7 +48,7 @@ jobs:
       LITEFUPZL_BROWSER: ${{ vars.LITEFUPZL_BROWSER || vars.FUCKPZL_ONESHOT_BROWSER || secrets.LITEFUPZL_BROWSER || secrets.FUCKPZL_ONESHOT_BROWSER || 'camoufox' }}
       LITEFUPZL_PROXY_SERVER: ${{ vars.LITEFUPZL_PROXY_SERVER || vars.FUCKPZL_ONESHOT_PROXY_SERVER || secrets.LITEFUPZL_PROXY_SERVER || secrets.FUCKPZL_ONESHOT_PROXY_SERVER || 'http://127.0.0.1:1080' }}
       LITEFUPZL_VIRTUAL_DISPLAY: ${{ vars.LITEFUPZL_VIRTUAL_DISPLAY || vars.FUCKPZL_ONESHOT_VIRTUAL_DISPLAY || secrets.LITEFUPZL_VIRTUAL_DISPLAY || secrets.FUCKPZL_ONESHOT_VIRTUAL_DISPLAY || 'true' }}
-      LITEFUPZL_COOKIE_REFRESH_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.cookie_refresh_enabled || vars.LITEFUPZL_COOKIE_REFRESH_ENABLED || vars.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || secrets.LITEFUPZL_COOKIE_REFRESH_ENABLED || secrets.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || 'false' }}
+      LITEFUPZL_COOKIE_REFRESH_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.cookie_refresh_enabled || vars.LITEFUPZL_COOKIE_REFRESH_ENABLED || vars.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || secrets.LITEFUPZL_COOKIE_REFRESH_ENABLED || secrets.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || 'true' }}
       # Usernames: opted into Variables. App logs alias them and the guard redacts them,
       # but the Variable value itself is plaintext (visible in Settings/API, unmasked in logs).
       LITEFUPZL_MUTUAL_LIKE_USERS_JSON: ${{ vars.LITEFUPZL_MUTUAL_LIKE_USERS_JSON || secrets.LITEFUPZL_MUTUAL_LIKE_USERS_JSON || '' }}
@@ -59,10 +56,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
 
@@ -89,9 +86,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[test]"
-          pip install proxy.py
+          python -m pip install --require-hashes --only-binary=:all: -r requirements.lock
+          python -m pip install --no-build-isolation --no-deps -e .
           sudo apt-get install -y xvfb
           case "${LITEFUPZL_BROWSER:-camoufox}" in
             patchright-chromium)
@@ -118,6 +114,10 @@ jobs:
 
       - name: Run oneshot
         id: run_oneshot
+        env:
+          # Scope production credentials to the process that actually needs them.
+          LITEFUPZL_COOKIES_JSON: ${{ secrets.LITEFUPZL_COOKIES_JSON || secrets.FUCKPZL_ONESHOT_COOKIES_JSON }}
+          LITEFUPZL_ACTIONS_ADMIN_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN }}
         run: |
           if [ "${LITEFUPZL_HEADLESS:-true}" = "false" ] && [ "${LITEFUPZL_VIRTUAL_DISPLAY:-true}" != "true" ]; then
             xvfb-run -a python apps/litefupzl/main.py
@@ -127,6 +127,8 @@ jobs:
 
       - name: Run auth probe
         if: failure() && steps.run_oneshot.outcome == 'failure'
+        env:
+          LITEFUPZL_COOKIES_JSON: ${{ secrets.LITEFUPZL_COOKIES_JSON || secrets.FUCKPZL_ONESHOT_COOKIES_JSON }}
         run: |
           if [ "${LITEFUPZL_HEADLESS:-true}" = "false" ] && [ "${LITEFUPZL_VIRTUAL_DISPLAY:-true}" != "true" ]; then
             xvfb-run -a python apps/litefupzl/auth_probe.py
@@ -136,11 +138,13 @@ jobs:
 
       - name: Run cookie refresh persistence probe
         if: always() && github.event_name == 'workflow_dispatch' && inputs.cookie_refresh_probe == 'true'
+        env:
+          LITEFUPZL_ACTIONS_ADMIN_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN }}
         run: python apps/litefupzl/cookie_refresh_probe.py
 
       - name: Upload redacted artifacts
         if: always() && github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: litefupzl-oneshot-public-artifacts
           path: |
@@ -153,7 +157,7 @@ jobs:
       - name: Cleanup old workflow runs
         if: always()
         env:
-          ACTIONS_CLEANUP_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN || github.token }}
+          ACTIONS_CLEANUP_TOKEN: ${{ github.token }}
           ACTIONS_RUNS_KEEP: ${{ vars.LITEFUPZL_ACTIONS_RUNS_KEEP || vars.FUCKPZL_ACTIONS_RUNS_KEEP || secrets.LITEFUPZL_ACTIONS_RUNS_KEEP || secrets.FUCKPZL_ACTIONS_RUNS_KEEP || '15' }}
         run: |
           python - <<'PY'

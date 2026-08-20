@@ -22,8 +22,8 @@ if str(CORE_SRC) not in sys.path:
 
 from litefupzl.browser.navigation import classify_cf_challenge, handle_cf_challenge  # noqa: E402
 from litefupzl.browser import navigation as navigation_module  # noqa: E402
-from litefupzl.oneshot.env_loader import load_oneshot_env  # noqa: E402
-from litefupzl.oneshot.session import _create_browser_context, _normalize_cookie_dicts  # noqa: E402
+from litefupzl.oneshot.env_loader import load_cf_probe_env  # noqa: E402
+from litefupzl.oneshot.session import _create_browser_context  # noqa: E402
 
 
 def _now() -> str:
@@ -87,7 +87,7 @@ def _probe_passed(snapshot: dict, status_history: list[dict]) -> bool:
 
 
 async def run_probe() -> int:
-    config = load_oneshot_env()
+    config = load_cf_probe_env()
     target_url = os.environ.get("LITEFUPZL_CF_PROBE_URL") or os.environ.get(
         "FUCKPZL_CF_PROBE_URL", "https://linux.do/challenge"
     )
@@ -105,6 +105,7 @@ async def run_probe() -> int:
         "headless": config.headless,
         "virtual_display": config.virtual_display,
         "proxy_configured": bool(config.proxy_server),
+        "initial_cookie_names": [],
         "navigation": None,
         "verification_navigation": None,
         "status_history": [],
@@ -121,8 +122,8 @@ async def run_probe() -> int:
             temp_profile=temp_profile,
             config=config,
         )
-        if config.cookies:
-            await context.add_cookies(_normalize_cookie_dicts(config.cookies[0]))
+        # This challenge-only probe must remain unauthenticated: injecting the
+        # configured production _t could rotate it without a matching write-back.
         try:
             visible_cookies = await context.cookies([target_url])
             result["initial_cookie_names"] = sorted(

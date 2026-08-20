@@ -22,7 +22,8 @@ class OneShotEnvConfig(BaseModel):
     browser_name: Literal["camoufox", "chromium", "firefox", "patchright-chromium"] = "camoufox"
     proxy_server: str | None = None
     virtual_display: bool = True
-    cookie_refresh_enabled: bool = False
+    cookie_refresh_enabled: bool = True
+    actions_admin_token: str | None = Field(default=None, exclude=True, repr=False)
     mutual_like_users: list[str] = Field(default_factory=list)
     monthly_topic_target: int = Field(default=500, ge=0, le=100_000)
     schedule_runs_per_day: int = Field(default=2, ge=1, le=24)
@@ -72,3 +73,20 @@ class OneShotEnvConfig(BaseModel):
         if self.topic_prefetch_max_pages < self.topic_prefetch_pages:
             raise ValueError("topic_prefetch_max_pages must be >= topic_prefetch_pages")
         return self
+
+
+class CFProbeEnvConfig(BaseModel):
+    """Browser-only settings for the unauthenticated Cloudflare probe."""
+
+    headless: bool = True
+    output_dir: str = "output/litefupzl"
+    browser_name: Literal["camoufox", "chromium", "firefox", "patchright-chromium"] = "camoufox"
+    proxy_server: str | None = None
+    virtual_display: bool = True
+    fingerprint: FingerprintConfig = Field(
+        default_factory=lambda: FingerprintConfig(
+            viewport=list(FINGERPRINT_VIEWPORT),
+            timezone=FINGERPRINT_TIMEZONE,
+            locale=FINGERPRINT_LOCALE,
+        )
+    )

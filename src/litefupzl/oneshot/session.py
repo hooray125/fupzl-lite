@@ -26,7 +26,7 @@ from litefupzl.discourse.http_bypass import (
 )
 from litefupzl.discourse.models import Topic
 from litefupzl.exceptions import SessionFatalError
-from litefupzl.oneshot.github_sync import refresh_slot_cookie_secret_from_context
+from litefupzl.oneshot.github_sync import CookieRefreshError, refresh_slot_cookie_secret_from_context
 from litefupzl.oneshot.logging import PublicRecorder
 from litefupzl.oneshot.models import SlotConfig, SlotResult, SlotStatus, WarningCode, utc_now_iso
 from litefupzl.oneshot.timings import TopicTimingsTracker, attach_topics_timing_observer
@@ -141,6 +141,34 @@ def _record_new_topic_target_status(result: SlotResult, recorder: PublicRecorder
         "met",
         code=f"COUNT_{result.new_topics_confirmed}",
     )
+
+
+def _reconcile_confirmed_new_topics(
+    *,
+    eligible_topic_ids: set[int],
+    counted_topic_ids: set[int],
+    tracker: TopicTimingsTracker,
+    result: SlotResult,
+    recorder: PublicRecorder,
+) -> None:
+    """Count delayed HTTP-200 timing confirmations exactly once."""
+    for topic_id in sorted(eligible_topic_ids - counted_topic_ids):
+        if not tracker.is_confirmed(topic_id):
+            continue
+        counted_topic_ids.add(topic_id)
+        result.new_topics_confirmed = len(counted_topic_ids)
+        recorder.emit(
+            result.slot_alias,
+            "new-topic",
+            "confirmed",
+            code=f"COUNT_{result.new_topics_confirmed}_OF_{result.new_topic_target}",
+        )
+
+
+def _mark_cookie_refresh_failure(result: SlotResult) -> None:
+    result.warning_codes.append(WarningCode.COOKIE_REFRESH_FAILED.value)
+    if result.status is SlotStatus.SUCCESS:
+        result.status = SlotStatus.WARNING
 
 
 async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -> SlotResult:
@@ -357,12 +385,20 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
             )
 
         visited: set[int] = set()
+        countable_new_topic_ids: set[int] = set()
         counted_new_topic_ids: set[int] = set()
         topic_index = 0
         read_warning_seen = False
         last_read_failure_code: str | None = None
 
         while time.monotonic() < deadline:
+            _reconcile_confirmed_new_topics(
+                eligible_topic_ids=countable_new_topic_ids,
+                counted_topic_ids=counted_new_topic_ids,
+                tracker=timings_tracker,
+                result=result,
+                recorder=recorder,
+            )
             if topic_index >= len(topic_list):
                 try:
                     remaining_target = max(
@@ -401,6 +437,8 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                 break
 
             is_countable_new_topic = _is_countable_new_topic(topic)
+            if is_countable_new_topic:
+                countable_new_topic_ids.add(topic.id)
             remaining_new_topics = max(
                 0,
                 result.new_topic_target - result.new_topics_confirmed,
@@ -465,6 +503,13 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                     else "READ_FAILED_SCROLL_EXCEPTION"
                 )
             finally:
+                _reconcile_confirmed_new_topics(
+                    eligible_topic_ids=countable_new_topic_ids,
+                    counted_topic_ids=counted_new_topic_ids,
+                    tracker=timings_tracker,
+                    result=result,
+                    recorder=recorder,
+                )
                 target_still_missing = result.new_topics_confirmed < result.new_topic_target
                 if is_countable_new_topic and target_still_missing:
                     confirmation_timeout = min(
@@ -479,20 +524,14 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                     # Once the hard minimum is met, keep reading without adding
                     # a five-second confirmation stall to every later topic.
                     timings_confirmed = timings_tracker.is_confirmed(topic.id)
-                if (
-                    is_countable_new_topic
-                    and timings_confirmed
-                    and topic.id not in counted_new_topic_ids
-                ):
-                    counted_new_topic_ids.add(topic.id)
-                    result.new_topics_confirmed = len(counted_new_topic_ids)
-                    recorder.emit(
-                        slot.slot_alias,
-                        "new-topic",
-                        "confirmed",
-                        code=f"COUNT_{result.new_topics_confirmed}_OF_{result.new_topic_target}",
-                    )
-                elif is_countable_new_topic and target_still_missing and not timings_confirmed:
+                _reconcile_confirmed_new_topics(
+                    eligible_topic_ids=countable_new_topic_ids,
+                    counted_topic_ids=counted_new_topic_ids,
+                    tracker=timings_tracker,
+                    result=result,
+                    recorder=recorder,
+                )
+                if is_countable_new_topic and target_still_missing and not timings_confirmed:
                     recorder.emit(
                         slot.slot_alias,
                         "new-topic",
@@ -519,6 +558,13 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                     user_agent=browser_user_agent,
                 )
 
+        _reconcile_confirmed_new_topics(
+            eligible_topic_ids=countable_new_topic_ids,
+            counted_topic_ids=counted_new_topic_ids,
+            tracker=timings_tracker,
+            result=result,
+            recorder=recorder,
+        )
         _record_new_topic_target_status(result, recorder, slot.slot_alias)
 
         if read_warning_seen and not result.read_ok:
@@ -560,7 +606,7 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                     result.cookie_refresh_ok = True
                     recorder.emit(slot.slot_alias, "cookie-refresh", "ok")
             except Exception as exc:
-                result.warning_codes.append(WarningCode.COOKIE_REFRESH_FAILED.value)
+                _mark_cookie_refresh_failure(result)
                 recorder.emit(
                     slot.slot_alias,
                     "cookie-refresh",
@@ -584,6 +630,7 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
             except Exception:
                 pass
         shutil.rmtree(temp_profile, ignore_errors=True)
+        _finish_result(result)
 
 
 async def _create_browser_context(*, temp_profile: Path, config):
@@ -1839,10 +1886,14 @@ async def _maybe_refresh_cookie_secret(context, slot: SlotConfig, config) -> boo
     if not getattr(config, "cookie_refresh_enabled", False):
         return False
 
-    admin_token = os.environ.get("LITEFUPZL_ACTIONS_ADMIN_TOKEN") or os.environ.get("FUCKPZL_ACTIONS_ADMIN_TOKEN")
+    admin_token = getattr(config, "actions_admin_token", None) or os.environ.get(
+        "LITEFUPZL_ACTIONS_ADMIN_TOKEN"
+    ) or os.environ.get("FUCKPZL_ACTIONS_ADMIN_TOKEN")
     repository = os.environ.get("GITHUB_REPOSITORY")
-    if not admin_token or not repository:
+    if not repository:
         return False
+    if not admin_token:
+        raise CookieRefreshError("COOKIE_REFRESH_CONFIG_MISSING")
 
     api_url = os.environ.get("GITHUB_API_URL") or "https://api.github.com"
     return await refresh_slot_cookie_secret_from_context(

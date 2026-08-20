@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from litefupzl.config.defaults import SESSION_DURATION_MINUTES
-from litefupzl.oneshot.env_schema import OneShotEnvConfig
+from litefupzl.oneshot.env_schema import CFProbeEnvConfig, OneShotEnvConfig
 from litefupzl.oneshot.redaction import install_sensitive_output_guard
 from litefupzl.utils import normalize_cookie_string
 
@@ -17,6 +17,12 @@ DEFAULT_MONTHLY_TOPIC_TARGET = 500
 DEFAULT_SCHEDULE_RUNS_PER_DAY = 2
 DEFAULT_TOPIC_PREFETCH_PAGES = 7
 DEFAULT_TOPIC_PREFETCH_MAX_PAGES = 10
+_SENSITIVE_PROCESS_ENV_KEYS = (
+    "LITEFUPZL_COOKIES_JSON",
+    "FUCKPZL_ONESHOT_COOKIES_JSON",
+    "LITEFUPZL_ACTIONS_ADMIN_TOKEN",
+    "FUCKPZL_ACTIONS_ADMIN_TOKEN",
+)
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
@@ -101,21 +107,36 @@ def _load_bool(primary_key: str, default: bool, alias_keys: tuple[str, ...] = ()
 def _cookie_refresh_enabled_from_env() -> bool:
     return _load_bool(
         "LITEFUPZL_COOKIE_REFRESH_ENABLED",
-        False,
+        True,
         alias_keys=("FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED",),
     )
+
+
+def _install_guard_and_scrub_sensitive_process_env() -> None:
+    install_sensitive_output_guard()
+    for sensitive_key in _SENSITIVE_PROCESS_ENV_KEYS:
+        os.environ.pop(sensitive_key, None)
 
 
 def load_oneshot_env() -> OneShotEnvConfig:
     """Load oneshot config from environment variables only."""
     _load_repo_env_files()
 
+    cookies = [
+        normalize_cookie_string(cookie)
+        for cookie in _load_json_array("LITEFUPZL_COOKIES_JSON", alias_keys=("FUCKPZL_ONESHOT_COOKIES_JSON",))
+    ]
+    actions_admin_token = os.environ.get("LITEFUPZL_ACTIONS_ADMIN_TOKEN") or os.environ.get(
+        "FUCKPZL_ACTIONS_ADMIN_TOKEN"
+    )
+    # Register literal redaction before removing credentials from the inherited
+    # environment. Browser child processes receive cookies through Playwright,
+    # not through process-wide environment variables, and never inherit the PAT.
+    _install_guard_and_scrub_sensitive_process_env()
+
     config = {
         "site": os.environ.get("LITEFUPZL_SITE") or os.environ.get("FUCKPZL_ONESHOT_SITE", "linux.do"),
-        "cookies": [
-            normalize_cookie_string(cookie)
-            for cookie in _load_json_array("LITEFUPZL_COOKIES_JSON", alias_keys=("FUCKPZL_ONESHOT_COOKIES_JSON",))
-        ],
+        "cookies": cookies,
         "duration_minutes": _load_int(
             "LITEFUPZL_DURATION_MINUTES",
             DEFAULT_ONESHOT_DURATION_MINUTES,
@@ -127,6 +148,7 @@ def load_oneshot_env() -> OneShotEnvConfig:
         "proxy_server": os.environ.get("LITEFUPZL_PROXY_SERVER") or os.environ.get("FUCKPZL_ONESHOT_PROXY_SERVER") or None,
         "virtual_display": _load_bool("LITEFUPZL_VIRTUAL_DISPLAY", True, alias_keys=("FUCKPZL_ONESHOT_VIRTUAL_DISPLAY",)),
         "cookie_refresh_enabled": _cookie_refresh_enabled_from_env(),
+        "actions_admin_token": actions_admin_token,
         "mutual_like_users": _load_optional_json_array("LITEFUPZL_MUTUAL_LIKE_USERS_JSON"),
         "monthly_topic_target": _load_int(
             "LITEFUPZL_MONTHLY_TOPIC_TARGET",
@@ -149,5 +171,27 @@ def load_oneshot_env() -> OneShotEnvConfig:
             alias_keys=("FUCKPZL_ONESHOT_TOPIC_PREFETCH_MAX_PAGES",),
         ),
     }
-    install_sensitive_output_guard()
     return OneShotEnvConfig.model_validate(config)
+
+
+def load_cf_probe_env() -> CFProbeEnvConfig:
+    """Load browser settings without requiring or retaining production cookies."""
+    _load_repo_env_files()
+    config = {
+        "headless": _load_bool("LITEFUPZL_HEADLESS", True, alias_keys=("FUCKPZL_ONESHOT_HEADLESS",)),
+        "output_dir": os.environ.get("LITEFUPZL_OUTPUT_DIR")
+        or os.environ.get("FUCKPZL_ONESHOT_OUTPUT_DIR", "output/litefupzl"),
+        "browser_name": os.environ.get("LITEFUPZL_BROWSER")
+        or os.environ.get("FUCKPZL_ONESHOT_BROWSER")
+        or "camoufox",
+        "proxy_server": os.environ.get("LITEFUPZL_PROXY_SERVER")
+        or os.environ.get("FUCKPZL_ONESHOT_PROXY_SERVER")
+        or None,
+        "virtual_display": _load_bool(
+            "LITEFUPZL_VIRTUAL_DISPLAY",
+            True,
+            alias_keys=("FUCKPZL_ONESHOT_VIRTUAL_DISPLAY",),
+        ),
+    }
+    _install_guard_and_scrub_sensitive_process_env()
+    return CFProbeEnvConfig.model_validate(config)
