@@ -119,6 +119,13 @@ def test_probe_workflow_never_refreshes_cookies():
     assert "|| 'https://linux.do/challenge'" in env["LITEFUPZL_CF_PROBE_URL"]
 
 
+def test_camoufox_install_uses_authenticated_github_api_in_both_workflows():
+    for filename in ("oneshot.yml", "probes.yml"):
+        raw = (ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+        assert 'GITHUB_TOKEN="${{ github.token }}" python apps/litefupzl/fetch_camoufox.py' in raw
+        assert "python -m camoufox fetch" not in raw
+
+
 def test_cleanup_old_workflow_runs_keeps_pagination_and_retention():
     for filename, job in [("oneshot.yml", "oneshot"), ("probes.yml", "probe")]:
         workflow = load_workflow(filename)
@@ -142,7 +149,7 @@ def test_workflows_install_selected_browser_backend():
         assert "LITEFUPZL_BROWSER" in script
         assert "patchright install --with-deps chromium" in script
         assert "camoufox)" in script
-        assert "camoufox fetch" in script
+        assert "python apps/litefupzl/fetch_camoufox.py" in script
         assert "playwright install-deps firefox" in script
         assert "playwright install --with-deps firefox" in script
         assert "playwright install --with-deps chromium" in script

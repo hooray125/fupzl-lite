@@ -99,7 +99,7 @@ jobs:
               ;;
             camoufox)
               python -m playwright install-deps firefox
-              python -m camoufox fetch
+              GITHUB_TOKEN="${{ github.token }}" python apps/litefupzl/fetch_camoufox.py
               ;;
             firefox)
               python -m playwright install --with-deps firefox
