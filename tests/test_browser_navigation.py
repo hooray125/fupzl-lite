@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 
@@ -32,6 +34,96 @@ def test_challenge_return_url_removes_only_transient_cf_tokens():
     assert _challenge_return_url(
         "https://aapl.eu.cc/?foo=1&__cf_chl_rt_tk=secret&bar=2#fragment"
     ) == "https://aapl.eu.cc/?foo=1&bar=2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body_text",
+    [
+        "Verification successful. Waiting...",
+        "Verification succeeded. Waiting...",
+    ],
+)
+async def test_waiting_verification_text_overrides_challenge_error(
+    monkeypatch,
+    body_text,
+):
+    from litefupzl.browser import navigation
+
+    class Context:
+        async def cookies(self, _urls):
+            return []
+
+    class Page:
+        url = "https://linux.do/challenge"
+        frames = []
+        context = Context()
+
+        async def title(self):
+            return "Just a moment..."
+
+        async def query_selector(self, _selector):
+            return None
+
+        async def evaluate(self, script):
+            waiting_pattern = re.search(
+                r"hasWaitingText:\s*/([^/]+)/i\.test\(text\)",
+                script,
+            )
+            assert waiting_pattern is not None
+            return {
+                "cType": "managed",
+                "hasChallengeError": True,
+                "hasVisibleChallengeIframe": True,
+                "hasTurnstileInput": True,
+                "hasVisibleInteractiveControl": True,
+                "hasWaitingText": bool(
+                    re.search(waiting_pattern.group(1), body_text, re.IGNORECASE)
+                ),
+                "hasChallengeText": False,
+            }
+
+    page = Page()
+    state = await navigation.classify_cf_challenge(page)
+
+    assert state["kind"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_handle_waiting_challenge_does_not_click_turnstile(monkeypatch):
+    from types import SimpleNamespace
+
+    from litefupzl.browser import navigation
+
+    waiting = {
+        "active": True,
+        "kind": "waiting",
+        "url": "https://linux.do/challenge",
+    }
+    clicks = []
+
+    async def fake_classify(_page):
+        return waiting
+
+    async def unexpected_click(_page):
+        clicks.append(True)
+        return True
+
+    async def no_sleep(_seconds):
+        return None
+
+    async def recovered(_page, _url):
+        return True
+
+    monkeypatch.setattr(navigation, "classify_cf_challenge", fake_classify)
+    monkeypatch.setattr(navigation, "_attempt_turnstile_click", unexpected_click)
+    monkeypatch.setattr(navigation, "_recover_after_challenge_timeout", recovered)
+    monkeypatch.setattr(navigation.asyncio, "sleep", no_sleep)
+
+    page = SimpleNamespace(url="https://linux.do/challenge")
+    await navigation.handle_cf_challenge(page, timeout_seconds=1)
+
+    assert clicks == []
 
 
 @pytest.mark.asyncio

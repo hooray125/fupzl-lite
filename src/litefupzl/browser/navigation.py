@@ -194,7 +194,7 @@ async def classify_cf_challenge(page) -> dict:
                   hasVisibleChallengeIframe,
                   hasTurnstileInput,
                   hasVisibleInteractiveControl,
-                  hasWaitingText: /verification succeeded|验证成功|正在等待|waiting for/i.test(text),
+                  hasWaitingText: /verification (?:succeeded|successful)|验证成功|正在等待|waiting for/i.test(text),
                   hasChallengeText: /just a moment|请稍候|performing security verification|正在进行安全验证|attention required|enable javascript and cookies|cloudflare/i.test(text),
                 };
             }"""
