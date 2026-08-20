@@ -15,7 +15,7 @@ write action is the bounded mutual-like pass described below.
 - Per-run never-read topic quota derived from a 30-day target.
 - Optional mutual-like pass for configured usernames.
 - Per-browser `/topics/timings` status diagnostics in redacted logs.
-- Optional cookie refresh with validation before writing a GitHub secret.
+- Opt-in cookie refresh from the already-authenticated browser context.
 - Manual and scheduled runs share the same cookie-refresh switch.
 - GitHub Actions run cleanup with recent-run retention.
 - Artifact upload is disabled by default and must be enabled per manual run.
@@ -38,11 +38,11 @@ LITEFUPZL_SCHEDULE_RUNS_PER_DAY=2
 LITEFUPZL_TOPIC_PREFETCH_PAGES=7
 LITEFUPZL_TOPIC_PREFETCH_MAX_PAGES=10
 LITEFUPZL_HEADLESS=true
-LITEFUPZL_BROWSER=chromium
+LITEFUPZL_BROWSER=camoufox
 LITEFUPZL_PROXY_SERVER=
 LITEFUPZL_VIRTUAL_DISPLAY=true
 LITEFUPZL_OUTPUT_DIR=output/litefupzl
-LITEFUPZL_COOKIE_REFRESH_ENABLED=true
+LITEFUPZL_COOKIE_REFRESH_ENABLED=false
 LITEFUPZL_MUTUAL_LIKE_USERS_JSON=[]
 ```
 
@@ -227,7 +227,10 @@ Supported values:
 - `camoufox`
 - `patchright-chromium`
 
-Default in Actions: `chromium`.
+Default in Actions: `camoufox`. This keeps the browser fingerprint and the
+Firefox-family HTTP fallback aligned and is the recommended backend for current
+Cloudflare challenges. Remove an older `LITEFUPZL_BROWSER=chromium` Variable or
+Secret if you want to use the new default.
 
 #### `LITEFUPZL_PROXY_SERVER`
 
@@ -250,7 +253,9 @@ Directory for local redacted output files. Default: `output/litefupzl`.
 
 #### `LITEFUPZL_CF_PROBE_URL`
 
-Challenge-probe URL. Set this only to the target you are authorized to test.
+Challenge-probe URL. Default: `https://linux.do/challenge`, where a normal 404
+outside a Cloudflare page is treated as success. Set this only to a target you
+are authorized to test.
 
 #### `LITEFUPZL_CF_PROBE_TIMEOUT_SECONDS`
 
@@ -263,11 +268,11 @@ Number of recent workflow runs to keep during cleanup. Default: `15`.
 #### `LITEFUPZL_COOKIE_REFRESH_ENABLED`
 
 Cookie refresh switch for local runs and scheduled GitHub Actions runs. Default:
-`true`.
+`false`.
 
 For scheduled GitHub Actions runs, set the repository Variable or Secret
-`LITEFUPZL_COOKIE_REFRESH_ENABLED=false` only if you want to disable automatic
-validated cookie write-back. Manual runs use the `cookie_refresh_enabled`
+`LITEFUPZL_COOKIE_REFRESH_ENABLED=true` only when you intentionally want
+same-session cookie write-back. Manual runs use the `cookie_refresh_enabled`
 workflow input for that single run.
 
 For local runs, use the same names as environment variables or put them in
@@ -284,8 +289,8 @@ Optional manual runtime override. Leave empty to use
 
 #### `cookie_refresh_enabled`
 
-Default: `true`. Set to `false` only for a manual run where refreshed cookies
-should not be written back to `LITEFUPZL_COOKIES_JSON`.
+Default: `false`. Set to `true` only for a manual run where refreshed cookies
+should be written back to `LITEFUPZL_COOKIES_JSON`.
 
 Scheduled runs do not read this manual input. They use repository secret
 `LITEFUPZL_COOKIE_REFRESH_ENABLED` instead.
@@ -352,7 +357,8 @@ successful quota.
 
 ## Cookie refresh behavior
 
-Cookie refresh is enabled by default.
+Cookie refresh is disabled by default so a normal run cannot replace the
+durable login secret. It remains available as an explicit opt-in.
 
 Manual runs use the `cookie_refresh_enabled` workflow input. Scheduled runs use
 repository Variable or Secret `LITEFUPZL_COOKIE_REFRESH_ENABLED`.
@@ -361,7 +367,9 @@ When enabled, the runner:
 
 1. extracts refreshed browser cookies from the authenticated context;
 2. drops volatile cookies such as `_forum_session` and `cf_clearance`;
-3. validates the refreshed cookie in a fresh browser session;
-4. writes the validated cookie JSON back to `LITEFUPZL_COOKIES_JSON`.
+3. relies on the login proof already completed in that same browser context;
+4. writes the latest durable cookie JSON back to `LITEFUPZL_COOKIES_JSON`.
 
-If validation fails, the secret is not updated.
+The runner does not open a second browser with the candidate token. That avoids
+rotating the candidate again and then persisting an already-stale token. If
+extraction or GitHub secret write-back fails, the secret is not updated.

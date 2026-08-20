@@ -101,7 +101,7 @@ def _load_bool(primary_key: str, default: bool, alias_keys: tuple[str, ...] = ()
 def _cookie_refresh_enabled_from_env() -> bool:
     return _load_bool(
         "LITEFUPZL_COOKIE_REFRESH_ENABLED",
-        True,
+        False,
         alias_keys=("FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED",),
     )
 
@@ -123,7 +123,7 @@ def load_oneshot_env() -> OneShotEnvConfig:
         ),
         "headless": _load_bool("LITEFUPZL_HEADLESS", True, alias_keys=("FUCKPZL_ONESHOT_HEADLESS",)),
         "output_dir": os.environ.get("LITEFUPZL_OUTPUT_DIR") or os.environ.get("FUCKPZL_ONESHOT_OUTPUT_DIR", "output/litefupzl"),
-        "browser_name": os.environ.get("LITEFUPZL_BROWSER") or os.environ.get("FUCKPZL_ONESHOT_BROWSER") or "chromium",
+        "browser_name": os.environ.get("LITEFUPZL_BROWSER") or os.environ.get("FUCKPZL_ONESHOT_BROWSER") or "camoufox",
         "proxy_server": os.environ.get("LITEFUPZL_PROXY_SERVER") or os.environ.get("FUCKPZL_ONESHOT_PROXY_SERVER") or None,
         "virtual_display": _load_bool("LITEFUPZL_VIRTUAL_DISPLAY", True, alias_keys=("FUCKPZL_ONESHOT_VIRTUAL_DISPLAY",)),
         "cookie_refresh_enabled": _cookie_refresh_enabled_from_env(),

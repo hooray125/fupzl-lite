@@ -106,7 +106,8 @@ async def test_run_slot_counts_only_explicit_unseen_with_matching_timings_200(mo
 
     async def fake_safe_goto(_page, url, *args, **kwargs):
         topic_id = int(url.rsplit("/", 1)[-1])
-        page.callbacks["response"](_Response(topic_id))
+        if topic_id != 2:
+            page.callbacks["response"](_Response(topic_id))
 
     async def fake_read_topic_to_bottom(*args, **kwargs):
         return True, None
@@ -131,7 +132,11 @@ async def test_run_slot_counts_only_explicit_unseen_with_matching_timings_200(mo
         "_build_topic_queue",
         lambda *args, **kwargs: asyncio.sleep(
             0,
-            result=[_topic(1, unseen=True), _topic(2, unseen=False)],
+            result=[
+                _topic(1, unseen=True),
+                _topic(2, unseen=True),
+                _topic(3, unseen=False),
+            ],
         ),
     )
     monkeypatch.setattr(session, "safe_goto", fake_safe_goto)
@@ -158,3 +163,4 @@ async def test_run_slot_counts_only_explicit_unseen_with_matching_timings_200(mo
     assert result.new_topics_confirmed == 1
     assert result.new_topic_target_met is True
     assert WarningCode.NEW_TOPIC_TARGET_UNMET.value not in result.warning_codes
+    assert not any(event.get("code") == "TIMINGS_NOT_CONFIRMED" for event in recorder.events)

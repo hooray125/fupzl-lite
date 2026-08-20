@@ -20,6 +20,9 @@ class TopicTimingsTracker:
     def prepare(self, topic_id: int) -> None:
         self._events.setdefault(topic_id, asyncio.Event())
 
+    def is_confirmed(self, topic_id: int) -> bool:
+        return topic_id in self._confirmed_topic_ids
+
     def observe_response(self, response) -> None:
         try:
             if TIMINGS_URL_CATEGORY not in response.url or int(response.status) != 200:

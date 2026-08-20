@@ -33,10 +33,10 @@ jobs:
       LITEFUPZL_DURATION_MINUTES: "2"
       LITEFUPZL_HEADLESS: ${{ vars.LITEFUPZL_HEADLESS || vars.FUCKPZL_ONESHOT_HEADLESS || secrets.LITEFUPZL_HEADLESS || secrets.FUCKPZL_ONESHOT_HEADLESS || 'false' }}
       LITEFUPZL_OUTPUT_DIR: ${{ vars.LITEFUPZL_OUTPUT_DIR || vars.FUCKPZL_ONESHOT_OUTPUT_DIR || secrets.LITEFUPZL_OUTPUT_DIR || secrets.FUCKPZL_ONESHOT_OUTPUT_DIR || 'output/litefupzl' }}
-      LITEFUPZL_BROWSER: ${{ vars.LITEFUPZL_BROWSER || vars.FUCKPZL_ONESHOT_BROWSER || secrets.LITEFUPZL_BROWSER || secrets.FUCKPZL_ONESHOT_BROWSER || 'chromium' }}
+      LITEFUPZL_BROWSER: ${{ vars.LITEFUPZL_BROWSER || vars.FUCKPZL_ONESHOT_BROWSER || secrets.LITEFUPZL_BROWSER || secrets.FUCKPZL_ONESHOT_BROWSER || 'camoufox' }}
       LITEFUPZL_PROXY_SERVER: ${{ vars.LITEFUPZL_PROXY_SERVER || vars.FUCKPZL_ONESHOT_PROXY_SERVER || secrets.LITEFUPZL_PROXY_SERVER || secrets.FUCKPZL_ONESHOT_PROXY_SERVER || 'http://127.0.0.1:1080' }}
       LITEFUPZL_VIRTUAL_DISPLAY: ${{ vars.LITEFUPZL_VIRTUAL_DISPLAY || vars.FUCKPZL_ONESHOT_VIRTUAL_DISPLAY || secrets.LITEFUPZL_VIRTUAL_DISPLAY || secrets.FUCKPZL_ONESHOT_VIRTUAL_DISPLAY || 'true' }}
-      LITEFUPZL_CF_PROBE_URL: ${{ vars.LITEFUPZL_CF_PROBE_URL || vars.FUCKPZL_CF_PROBE_URL || secrets.LITEFUPZL_CF_PROBE_URL || secrets.FUCKPZL_CF_PROBE_URL || 'https://aapl.eu.cc' }}
+      LITEFUPZL_CF_PROBE_URL: ${{ vars.LITEFUPZL_CF_PROBE_URL || vars.FUCKPZL_CF_PROBE_URL || secrets.LITEFUPZL_CF_PROBE_URL || secrets.FUCKPZL_CF_PROBE_URL || 'https://linux.do/challenge' }}
       LITEFUPZL_CF_PROBE_TIMEOUT_SECONDS: ${{ vars.LITEFUPZL_CF_PROBE_TIMEOUT_SECONDS || vars.FUCKPZL_CF_PROBE_TIMEOUT_SECONDS || secrets.LITEFUPZL_CF_PROBE_TIMEOUT_SECONDS || secrets.FUCKPZL_CF_PROBE_TIMEOUT_SECONDS || '120' }}
       LITEFUPZL_COOKIE_REFRESH_ENABLED: "false"
 
@@ -76,7 +76,7 @@ jobs:
           pip install -e ".[test]"
           pip install proxy.py
           sudo apt-get install -y xvfb
-          case "${LITEFUPZL_BROWSER:-chromium}" in
+          case "${LITEFUPZL_BROWSER:-camoufox}" in
             patchright-chromium)
               python -m patchright install --with-deps chromium
               ;;

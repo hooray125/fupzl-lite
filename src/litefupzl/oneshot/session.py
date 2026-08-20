@@ -22,7 +22,6 @@ from litefupzl.discourse.http_bypass import (
     extract_current_username_via_http,
     get_latest_topics_pages_via_http,
     get_user_info_via_http,
-    is_cookie_authenticated_via_http,
     probe_cookie_login_state_via_http,
 )
 from litefupzl.discourse.models import Topic
@@ -466,14 +465,20 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                     else "READ_FAILED_SCROLL_EXCEPTION"
                 )
             finally:
-                confirmation_timeout = min(
-                    _ONESHOT_TOPIC_TIMINGS_CONFIRM_TIMEOUT_SECONDS,
-                    max(0.0, topic_deadline - time.monotonic()),
-                )
-                timings_confirmed = await timings_tracker.wait_for_confirmation(
-                    topic.id,
-                    timeout_seconds=confirmation_timeout,
-                )
+                target_still_missing = result.new_topics_confirmed < result.new_topic_target
+                if is_countable_new_topic and target_still_missing:
+                    confirmation_timeout = min(
+                        _ONESHOT_TOPIC_TIMINGS_CONFIRM_TIMEOUT_SECONDS,
+                        max(0.0, topic_deadline - time.monotonic()),
+                    )
+                    timings_confirmed = await timings_tracker.wait_for_confirmation(
+                        topic.id,
+                        timeout_seconds=confirmation_timeout,
+                    )
+                else:
+                    # Once the hard minimum is met, keep reading without adding
+                    # a five-second confirmation stall to every later topic.
+                    timings_confirmed = timings_tracker.is_confirmed(topic.id)
                 if (
                     is_countable_new_topic
                     and timings_confirmed
@@ -487,7 +492,7 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                         "confirmed",
                         code=f"COUNT_{result.new_topics_confirmed}_OF_{result.new_topic_target}",
                     )
-                elif is_countable_new_topic and not timings_confirmed:
+                elif is_countable_new_topic and target_still_missing and not timings_confirmed:
                     recorder.emit(
                         slot.slot_alias,
                         "new-topic",
@@ -659,11 +664,10 @@ async def _create_camoufox_context(*, config, virtual_display_active: bool = Fal
         manager_kwargs["proxy"] = proxy_options
     manager = AsyncCamoufox(**manager_kwargs)
     browser = await manager.__aenter__()
-    context = await browser.new_context(
-        viewport=viewport,
-        locale=ctx_options["locale"],
-        timezone_id=_oneshot_timezone_id(),
-    )
+    # Camoufox already applies its generated viewport, locale, and timezone at
+    # launch. Sending Playwright's default viewport payload again is both
+    # fingerprint-inconsistent and incompatible with current Camoufox builds.
+    context = await browser.new_context(no_viewport=True)
     main_page = await context.new_page()
     json_page = await context.new_page()
     return _CamoufoxController(manager), context, main_page, json_page
@@ -1831,56 +1835,6 @@ async def _read_topic_to_bottom(page, *, remaining_seconds: int) -> tuple[bool, 
     return False, "READ_FAILED_UNKNOWN"
 
 
-async def _validate_cookie_refresh_candidate_via_fresh_browser(cookie_string: str, config) -> bool:
-    """Verify a refreshed durable cookie in a brand-new browser profile.
-
-    This prevents write-back of environment-bound or otherwise poisoned `_t`
-    values that only work inside the current live browser context.
-    """
-    slot_cookies = _normalize_cookie_dicts(cookie_string)
-    if not slot_cookies:
-        return False
-
-    temp_profile = Path(tempfile.mkdtemp(prefix="litefupzl-refresh-validate-"))
-    pw = context = page = json_page = None
-    try:
-        pw, context, page, json_page = await _create_browser_context(
-            temp_profile=temp_profile,
-            config=config,
-        )
-        browser_user_agent = await _get_browser_user_agent(page)
-        await prime_cf_challenge(page, _BASE_URL, timeout_seconds=60)
-        browser_state = await _bootstrap_cookie_session(page, context, slot_cookies)
-        browser_state = await _require_authenticated_login_proof(page, slot_cookies, browser_state)
-        if browser_state != "ok":
-            return False
-        return await asyncio.to_thread(
-            is_cookie_authenticated_via_http,
-            slot_cookies,
-            _BASE_URL,
-            user_agent=browser_user_agent,
-        )
-    except Exception:
-        return False
-    finally:
-        if json_page is not None:
-            try:
-                await json_page.close()
-            except Exception:
-                pass
-        if context is not None:
-            try:
-                await context.close()
-            except Exception:
-                pass
-        if pw is not None:
-            try:
-                await pw.stop()
-            except Exception:
-                pass
-        shutil.rmtree(temp_profile, ignore_errors=True)
-
-
 async def _maybe_refresh_cookie_secret(context, slot: SlotConfig, config) -> bool:
     if not getattr(config, "cookie_refresh_enabled", False):
         return False
@@ -1891,12 +1845,6 @@ async def _maybe_refresh_cookie_secret(context, slot: SlotConfig, config) -> boo
         return False
 
     api_url = os.environ.get("GITHUB_API_URL") or "https://api.github.com"
-    async def validate_cookie_string(cookie_string: str) -> bool:
-        cookies = _normalize_cookie_dicts(cookie_string)
-        if not cookies:
-            return False
-        return await _validate_cookie_refresh_candidate_via_fresh_browser(cookie_string, config)
-
     return await refresh_slot_cookie_secret_from_context(
         context,
         original_cookie_string=slot.cookie,
@@ -1906,5 +1854,4 @@ async def _maybe_refresh_cookie_secret(context, slot: SlotConfig, config) -> boo
         repository=repository,
         api_url=api_url,
         base_url=_BASE_URL,
-        validate_cookie_string=validate_cookie_string,
     )

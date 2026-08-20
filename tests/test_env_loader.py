@@ -16,7 +16,8 @@ def test_env_loader_requires_only_cookie_and_no_like_lottery(monkeypatch):
 
     assert config.cookies == ["_t=redacted"]
     assert config.duration_minutes == 40
-    assert config.cookie_refresh_enabled is True
+    assert config.cookie_refresh_enabled is False
+    assert config.browser_name == "camoufox"
     assert config.monthly_topic_target == 500
     assert config.schedule_runs_per_day == 2
     assert config.new_topic_target_per_run == 9
@@ -52,7 +53,7 @@ def test_manual_cookie_refresh_can_opt_in(monkeypatch):
     assert config.cookie_refresh_enabled is True
 
 
-def test_cookie_refresh_default_is_enabled_for_schedule(monkeypatch):
+def test_cookie_refresh_default_is_disabled_for_schedule(monkeypatch):
     from litefupzl.oneshot.env_loader import load_oneshot_env
 
     monkeypatch.setenv("LITEFUPZL_COOKIES_JSON", json.dumps(["_t=redacted"]))
@@ -62,7 +63,7 @@ def test_cookie_refresh_default_is_enabled_for_schedule(monkeypatch):
 
     config = load_oneshot_env()
 
-    assert config.cookie_refresh_enabled is True
+    assert config.cookie_refresh_enabled is False
 
 
 def test_cookie_refresh_can_still_be_disabled_explicitly(monkeypatch):

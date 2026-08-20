@@ -29,6 +29,7 @@ async def test_schedule_does_not_bypass_runtime_cookie_refresh_when_enabled(monk
     assert len(calls) == 1
     assert calls[0]["slot_index"] == 1
     assert calls[0]["repository"] == "owner/repo"
+    assert "validate_cookie_string" not in calls[0]
 
 
 @pytest.mark.asyncio

@@ -9,14 +9,14 @@ from __future__ import annotations
 import asyncio
 import json
 import random
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from loguru import logger
 
 from litefupzl.exceptions import SessionFatalError
 
 TURNSTILE_INITIAL_WAIT_SECONDS = 5.0
-TURNSTILE_POST_CLICK_WAIT_SECONDS = 2.5
+TURNSTILE_POST_CLICK_WAIT_SECONDS = 8.0
 TURNSTILE_COOLDOWN_WAIT_SECONDS = 10.0
 
 
@@ -267,7 +267,7 @@ def _cf_state(
     }
 
 
-async def handle_cf_challenge(page, timeout_seconds: int = 35) -> None:
+async def handle_cf_challenge(page, timeout_seconds: int = 120) -> None:
     """Wait for CF challenge to resolve. Raises SessionFatalError on timeout.
 
     Polls page title every 2s. Attempts Turnstile checkbox click if found.
@@ -281,6 +281,7 @@ async def handle_cf_challenge(page, timeout_seconds: int = 35) -> None:
     poll_interval = 2
     click_attempts = 0
     clear_observations = 0
+    clearance_resume_attempts = 0
     post_click_wait_seconds = 0.0
     first_click_probe = True
 
@@ -314,11 +315,22 @@ async def handle_cf_challenge(page, timeout_seconds: int = 35) -> None:
         clear_observations = 0
 
         if state["kind"] == "clearance_pending":
-            logger.info("Cloudflare clearance cookie observed, waiting for final navigation")
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=5_000)
-            except Exception:
-                pass
+            logger.info("Cloudflare clearance cookie observed, resuming target navigation")
+            if clearance_resume_attempts < 2:
+                clearance_resume_attempts += 1
+                return_url = _challenge_return_url(state.get("url") or str(getattr(page, "url", "")))
+                await _resume_after_clearance(page, return_url)
+                state = await classify_cf_challenge(page)
+                continue
+
+    # Cloudflare can finish verification just after the last regular poll. A
+    # final target navigation is therefore useful even when the cookie API has
+    # not exposed cf_clearance yet. If verification is still incomplete, this
+    # simply returns to the challenge page and the normal failure is preserved.
+    return_url = _challenge_return_url(str(getattr(page, "url", "")))
+    if await _recover_after_challenge_timeout(page, return_url):
+        logger.info("Cloudflare challenge passed after final target navigation")
+        return
 
     if click_attempts > 0:
         raise SessionFatalError("Cloudflare interactive challenge not resolved within timeout")
@@ -348,6 +360,7 @@ async def prime_cf_challenge(
     elapsed = 0.0
     poll_interval = 2
     click_attempts = 0
+    clearance_resume_attempts = 0
     post_click_wait_seconds = 0.0
     first_click_probe = True
 
@@ -364,8 +377,18 @@ async def prime_cf_challenge(
             return True
 
         if await _has_cf_clearance(page, base_url):
-            logger.info("Challenge prewarm obtained cf_clearance cookie")
-            return True
+            logger.info("Challenge prewarm obtained cf_clearance cookie; verifying target navigation")
+            if clearance_resume_attempts >= 2:
+                logger.warning("Challenge prewarm clearance did not produce a usable target page")
+                return False
+            clearance_resume_attempts += 1
+            await _resume_after_clearance(page, challenge_url)
+            elapsed += 2.0
+            state = await classify_cf_challenge(page)
+            if not state["active"]:
+                logger.info("Challenge prewarm passed after clearance navigation")
+                return True
+            continue
 
         if first_click_probe and state["kind"] in {"managed", "waiting", "loading"}:
             await asyncio.sleep(TURNSTILE_INITIAL_WAIT_SECONDS)
@@ -384,6 +407,12 @@ async def prime_cf_challenge(
         await asyncio.sleep(sleep_seconds)
         elapsed += sleep_seconds
         post_click_wait_seconds = 0.0
+
+    # Mirror handle_cf_challenge's final recovery. In current Turnstile flows
+    # the verification response may become reusable only on the next request.
+    if await _recover_after_challenge_timeout(page, challenge_url):
+        logger.info("Challenge prewarm passed after final target navigation")
+        return True
 
     logger.warning("Challenge prewarm did not reach a usable state before timeout")
     return False
@@ -444,8 +473,9 @@ async def _attempt_turnstile_click(page) -> bool:
             if checkbox:
                 box = await checkbox.bounding_box()
                 if box:
-                    x = box["x"] + box["width"] / 2 + random.uniform(-3, 3)
-                    y = box["y"] + box["height"] / 2 + random.uniform(-3, 3)
+                    x, y = _turnstile_checkbox_target(box)
+                    x += random.uniform(-2, 2)
+                    y += random.uniform(-2, 2)
                     await _human_like_mouse_click(page, x, y)
                     _record_turnstile_click(
                         page,
@@ -509,26 +539,82 @@ async def _should_attempt_turnstile_click(page, state: dict) -> bool:
         return False
     if kind not in {"managed", "loading"}:
         return False
+    container_box = await _locate_turnstile_container_box(page)
     return bool(
         await _collect_challenge_frame_boxes(page)
-        or await _locate_turnstile_container_box(page)
+        or (container_box and _is_usable_turnstile_box(container_box))
     )
 
 
 _TURNSTILE_PIXEL_TARGETS = (
-    (0.03, 0.30),
-    (0.04, 0.30),
-    (0.05, 0.30),
-    (0.06, 0.30),
-    (0.08, 0.30),
-    (0.10, 0.30),
-    (0.12, 0.30),
-    (0.03, 0.40),
+    (0.07, 0.50),
+    (0.08, 0.50),
+    (0.09, 0.50),
+    (0.10, 0.50),
+    (0.06, 0.50),
+    (0.11, 0.50),
+    (0.08, 0.42),
+    (0.08, 0.58),
 )
 
 
 def _turnstile_click_budget_exhausted(click_attempts: int) -> bool:
     return click_attempts >= len(_TURNSTILE_PIXEL_TARGETS)
+
+
+def _turnstile_checkbox_target(box: dict) -> tuple[float, float]:
+    """Target the left 24px checkbox even when its DOM box spans the label."""
+    width = max(0.0, float(box.get("width", 0)))
+    height = max(0.0, float(box.get("height", 0)))
+    x = float(box.get("x", 0)) + min(width / 2, 12.0)
+    y = float(box.get("y", 0)) + min(height / 2, 12.0)
+    return x, y
+
+
+def _challenge_return_url(url: str) -> str:
+    """Remove transient Cloudflare challenge query parameters from a URL."""
+    parsed = urlsplit(url)
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key not in {"__cf_chl_rt_tk", "__cf_chl_tk"}
+    ]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path or "/", urlencode(query), ""))
+
+
+async def _resume_after_clearance(page, target_url: str) -> None:
+    """Actively leave CF's waiting page after a clearance cookie is issued."""
+    if not target_url:
+        return
+    try:
+        await page.goto(target_url, timeout=30_000, wait_until="domcontentloaded")
+    except Exception as exc:
+        logger.debug(f"Clearance resume navigation error (continuing): {exc}")
+    await asyncio.sleep(2.0)
+
+
+async def _wait_for_challenge_exit(page, *, timeout_seconds: float) -> bool:
+    """Allow delayed Turnstile completion after the final target request."""
+    elapsed = 0.0
+    poll_interval = 2.0
+    while elapsed <= timeout_seconds:
+        state = await classify_cf_challenge(page)
+        if not state["active"]:
+            return True
+        if elapsed >= timeout_seconds:
+            break
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+    return False
+
+
+async def _recover_after_challenge_timeout(page, target_url: str) -> bool:
+    """Retry the target request that commits a just-completed CF challenge."""
+    for _ in range(2):
+        await _resume_after_clearance(page, target_url)
+        if await _wait_for_challenge_exit(page, timeout_seconds=20):
+            return True
+    return False
 
 
 async def _click_turnstile_pixel_region(page, box: dict, *, strategy: str) -> bool:
@@ -624,7 +710,7 @@ def _is_usable_turnstile_box(box) -> bool:
         height = float(box.get("height", 0))
     except Exception:
         return False
-    return width >= 120 and height >= 40
+    return 120 <= width <= 500 and 40 <= height <= 150
 
 
 def _sanitize_box(box: dict) -> dict:

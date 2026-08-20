@@ -171,6 +171,10 @@ async def refresh_slot_cookie_secret_from_context(
             secret_value=json.dumps(updated_cookie_strings),
             api_url=api_url,
         )
+        # Slots execute sequentially. Keep the in-memory source list in sync so
+        # a later slot cannot overwrite an earlier slot's refreshed token with
+        # the stale value captured at workflow startup.
+        cookie_strings[slot_index - 1] = refreshed_cookie_string
         return True
     except CookieRefreshError:
         raise

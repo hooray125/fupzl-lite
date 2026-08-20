@@ -20,10 +20,10 @@ CORE_SRC = ROOT / "src"
 if str(CORE_SRC) not in sys.path:
     sys.path.insert(0, str(CORE_SRC))
 
-from litefupzl.browser.navigation import classify_cf_challenge, handle_cf_challenge
-from litefupzl.browser import navigation as navigation_module
-from litefupzl.oneshot.env_loader import load_oneshot_env
-from litefupzl.oneshot.session import _create_browser_context, _normalize_cookie_dicts
+from litefupzl.browser.navigation import classify_cf_challenge, handle_cf_challenge  # noqa: E402
+from litefupzl.browser import navigation as navigation_module  # noqa: E402
+from litefupzl.oneshot.env_loader import load_oneshot_env  # noqa: E402
+from litefupzl.oneshot.session import _create_browser_context, _normalize_cookie_dicts  # noqa: E402
 
 
 def _now() -> str:
@@ -88,7 +88,9 @@ def _probe_passed(snapshot: dict, status_history: list[dict]) -> bool:
 
 async def run_probe() -> int:
     config = load_oneshot_env()
-    target_url = os.environ.get("LITEFUPZL_CF_PROBE_URL") or os.environ.get("FUCKPZL_CF_PROBE_URL", "https://aapl.eu.cc")
+    target_url = os.environ.get("LITEFUPZL_CF_PROBE_URL") or os.environ.get(
+        "FUCKPZL_CF_PROBE_URL", "https://linux.do/challenge"
+    )
     timeout_seconds = int(
         os.environ.get("LITEFUPZL_CF_PROBE_TIMEOUT_SECONDS")
         or os.environ.get("FUCKPZL_CF_PROBE_TIMEOUT_SECONDS", "120")

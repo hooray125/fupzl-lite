@@ -64,8 +64,12 @@ def test_artifacts_upload_is_manual_opt_in_for_both_workflows():
 
 def test_oneshot_workflow_removed_write_action_env_and_supports_refresh_dual_stack():
     workflow = load_workflow("oneshot.yml")
+    assert workflow["concurrency"] == {
+        "group": "litefupzl-oneshot",
+        "cancel-in-progress": False,
+    }
     inputs = workflow[True]["workflow_dispatch"]["inputs"]
-    assert inputs["cookie_refresh_enabled"]["default"] == "true"
+    assert inputs["cookie_refresh_enabled"]["default"] == "false"
     env = workflow["jobs"]["oneshot"]["env"]
     forbidden_env = [key for key in env if "LOTTERY" in key]
     assert forbidden_env == []
@@ -81,8 +85,9 @@ def test_oneshot_workflow_removed_write_action_env_and_supports_refresh_dual_sta
     assert "vars.LITEFUPZL_COOKIE_REFRESH_ENABLED" in refresh_expr
     assert "secrets.LITEFUPZL_COOKIE_REFRESH_ENABLED" in refresh_expr
     assert "secrets.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED" in refresh_expr
-    assert "|| 'true'" in refresh_expr
+    assert "|| 'false'" in refresh_expr
     assert "inputs.cookie_refresh_enabled == 'true' && 'true' || 'false'" not in refresh_expr
+    assert "|| 'camoufox'" in env["LITEFUPZL_BROWSER"]
 
 
 def test_oneshot_topic_quota_defaults_match_two_daily_schedules():
@@ -110,6 +115,8 @@ def test_probe_workflow_never_refreshes_cookies():
     workflow = load_workflow("probes.yml")
     env = workflow["jobs"]["probe"]["env"]
     assert env["LITEFUPZL_COOKIE_REFRESH_ENABLED"] == "false"
+    assert "|| 'camoufox'" in env["LITEFUPZL_BROWSER"]
+    assert "|| 'https://linux.do/challenge'" in env["LITEFUPZL_CF_PROBE_URL"]
 
 
 def test_cleanup_old_workflow_runs_keeps_pagination_and_retention():

@@ -13,7 +13,7 @@ from curl_cffi import requests
 
 from litefupzl.discourse.models import Topic, UserInfo
 
-_IMPERSONATE = "firefox135"
+_DEFAULT_IMPERSONATE = "firefox"
 _SESSION_CURRENT_JSON_URL = "https://linux.do/session/current.json"
 _NOTIFICATIONS_JSON_URL = "https://linux.do/notifications.json?recent=true&limit=1"
 _CSRF_URL = "https://linux.do/session/csrf"
@@ -40,6 +40,18 @@ def _clean_user_agent(user_agent: str | None) -> str | None:
         return None
     cleaned = str(user_agent).strip()
     return cleaned or None
+
+
+def _impersonate_for_user_agent(user_agent: str | None) -> str:
+    """Keep curl_cffi's TLS/browser family aligned with the active browser."""
+    lowered = (user_agent or "").lower()
+    if "firefox" in lowered:
+        return "firefox"
+    if "safari" in lowered and "chrome" not in lowered and "chromium" not in lowered:
+        return "safari"
+    if "chrome" in lowered or "chromium" in lowered:
+        return "chrome"
+    return _DEFAULT_IMPERSONATE
 
 
 def _base_headers(accept: str, *, referer: str | None = None, user_agent: str | None = None) -> dict[str, str]:
@@ -143,7 +155,7 @@ def _extract_error_text(body: str) -> str:
 def _get_csrf_token(session: requests.Session) -> str | None:
     response = session.get(
         _CSRF_URL,
-        impersonate=_IMPERSONATE,
+        impersonate=_impersonate_for_user_agent(session.headers.get("User-Agent")),
         timeout=20,
         headers={
             **session.headers,
@@ -178,7 +190,7 @@ def like_post_via_post_actions(
 
     response = session.post(
         _POST_ACTIONS_URL,
-        impersonate=_IMPERSONATE,
+        impersonate=_impersonate_for_user_agent(session.headers.get("User-Agent")),
         timeout=20,
         data={
             "id": post_id,
@@ -206,7 +218,7 @@ def like_post_via_post_actions(
 def fetch_json(cookies: list[dict], url: str, *, referer: str | None = None, user_agent: str | None = None) -> dict:
     """Fetch a JSON endpoint via curl_cffi using authenticated cookies."""
     session = _build_session(cookies, accept=_JSON_ACCEPT, referer=referer, user_agent=user_agent)
-    response = session.get(url, impersonate=_IMPERSONATE, timeout=20)
+    response = session.get(url, impersonate=_impersonate_for_user_agent(user_agent), timeout=20)
     if response.status_code != 200:
         raise RuntimeError(f"HTTP {response.status_code} for {url}")
     try:
@@ -218,7 +230,7 @@ def fetch_json(cookies: list[dict], url: str, *, referer: str | None = None, use
 def fetch_html(cookies: list[dict], url: str, *, referer: str | None = None, user_agent: str | None = None) -> str:
     """Fetch an HTML endpoint via curl_cffi using authenticated cookies."""
     session = _build_session(cookies, accept=_HTML_ACCEPT, referer=referer, user_agent=user_agent)
-    response = session.get(url, impersonate=_IMPERSONATE, timeout=20)
+    response = session.get(url, impersonate=_impersonate_for_user_agent(user_agent), timeout=20)
     if response.status_code != 200:
         raise RuntimeError(f"HTTP {response.status_code} for {url}")
     return response.text
@@ -278,7 +290,11 @@ def probe_cookie_login_state_via_http(cookies: list[dict], base_url: str, *, use
 
     session = _build_session(cookies, accept=_JSON_ACCEPT, referer=base_url, user_agent=user_agent)
     try:
-        response = session.get(_SESSION_CURRENT_JSON_URL, impersonate=_IMPERSONATE, timeout=20)
+        response = session.get(
+            _SESSION_CURRENT_JSON_URL,
+            impersonate=_impersonate_for_user_agent(user_agent),
+            timeout=20,
+        )
         if response.status_code == 200:
             if _extract_current_user_from_payload(response.text) is not None:
                 return "ok"
@@ -297,7 +313,11 @@ def probe_cookie_login_state_via_http(cookies: list[dict], base_url: str, *, use
         pass
 
     try:
-        response = session.get(_NOTIFICATIONS_JSON_URL, impersonate=_IMPERSONATE, timeout=20)
+        response = session.get(
+            _NOTIFICATIONS_JSON_URL,
+            impersonate=_impersonate_for_user_agent(user_agent),
+            timeout=20,
+        )
         if response.status_code == 200:
             if _is_valid_json_payload(response.text):
                 return "ok"
@@ -361,7 +381,11 @@ def extract_current_username_via_http(cookies: list[dict], base_url: str, *, use
     """Extract the current authenticated username from server-rendered HTML."""
     session = _build_session(cookies, accept=_JSON_ACCEPT, referer=base_url, user_agent=user_agent)
     try:
-        response = session.get(_SESSION_CURRENT_JSON_URL, impersonate=_IMPERSONATE, timeout=20)
+        response = session.get(
+            _SESSION_CURRENT_JSON_URL,
+            impersonate=_impersonate_for_user_agent(user_agent),
+            timeout=20,
+        )
         if response.status_code == 200:
             user = _extract_current_user_from_payload(response.text)
             username = user.get("username") if isinstance(user, dict) else None

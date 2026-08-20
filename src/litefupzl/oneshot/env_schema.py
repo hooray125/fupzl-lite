@@ -19,7 +19,7 @@ class OneShotEnvConfig(BaseModel):
     duration_minutes: int = Field(default=40, ge=1, le=240)
     headless: bool = True
     output_dir: str = "output/litefupzl"
-    browser_name: Literal["camoufox", "chromium", "firefox", "patchright-chromium"] = "chromium"
+    browser_name: Literal["camoufox", "chromium", "firefox", "patchright-chromium"] = "camoufox"
     proxy_server: str | None = None
     virtual_display: bool = True
     cookie_refresh_enabled: bool = False

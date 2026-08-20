@@ -10,7 +10,7 @@ on:
       cookie_refresh_enabled:
         description: Enable production cookie refresh write-back for this manual run
         required: false
-        default: "true"
+        default: "false"
       cookie_refresh_probe:
         description: Run a dedicated redacted GitHub secret persistence probe
         required: false
@@ -23,6 +23,10 @@ on:
     # GitHub cron is always UTC. These map to 09:30 and 15:30 UTC+8.
     - cron: "30 1 * * *"
     - cron: "30 7 * * *"
+
+concurrency:
+  group: litefupzl-oneshot
+  cancel-in-progress: false
 
 jobs:
   oneshot:
@@ -44,10 +48,10 @@ jobs:
       LITEFUPZL_TOPIC_PREFETCH_MAX_PAGES: ${{ vars.LITEFUPZL_TOPIC_PREFETCH_MAX_PAGES || vars.FUCKPZL_ONESHOT_TOPIC_PREFETCH_MAX_PAGES || secrets.LITEFUPZL_TOPIC_PREFETCH_MAX_PAGES || secrets.FUCKPZL_ONESHOT_TOPIC_PREFETCH_MAX_PAGES || '10' }}
       LITEFUPZL_HEADLESS: ${{ vars.LITEFUPZL_HEADLESS || vars.FUCKPZL_ONESHOT_HEADLESS || secrets.LITEFUPZL_HEADLESS || secrets.FUCKPZL_ONESHOT_HEADLESS || 'false' }}
       LITEFUPZL_OUTPUT_DIR: ${{ vars.LITEFUPZL_OUTPUT_DIR || vars.FUCKPZL_ONESHOT_OUTPUT_DIR || secrets.LITEFUPZL_OUTPUT_DIR || secrets.FUCKPZL_ONESHOT_OUTPUT_DIR || 'output/litefupzl' }}
-      LITEFUPZL_BROWSER: ${{ vars.LITEFUPZL_BROWSER || vars.FUCKPZL_ONESHOT_BROWSER || secrets.LITEFUPZL_BROWSER || secrets.FUCKPZL_ONESHOT_BROWSER || 'chromium' }}
+      LITEFUPZL_BROWSER: ${{ vars.LITEFUPZL_BROWSER || vars.FUCKPZL_ONESHOT_BROWSER || secrets.LITEFUPZL_BROWSER || secrets.FUCKPZL_ONESHOT_BROWSER || 'camoufox' }}
       LITEFUPZL_PROXY_SERVER: ${{ vars.LITEFUPZL_PROXY_SERVER || vars.FUCKPZL_ONESHOT_PROXY_SERVER || secrets.LITEFUPZL_PROXY_SERVER || secrets.FUCKPZL_ONESHOT_PROXY_SERVER || 'http://127.0.0.1:1080' }}
       LITEFUPZL_VIRTUAL_DISPLAY: ${{ vars.LITEFUPZL_VIRTUAL_DISPLAY || vars.FUCKPZL_ONESHOT_VIRTUAL_DISPLAY || secrets.LITEFUPZL_VIRTUAL_DISPLAY || secrets.FUCKPZL_ONESHOT_VIRTUAL_DISPLAY || 'true' }}
-      LITEFUPZL_COOKIE_REFRESH_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.cookie_refresh_enabled || vars.LITEFUPZL_COOKIE_REFRESH_ENABLED || vars.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || secrets.LITEFUPZL_COOKIE_REFRESH_ENABLED || secrets.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || 'true' }}
+      LITEFUPZL_COOKIE_REFRESH_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.cookie_refresh_enabled || vars.LITEFUPZL_COOKIE_REFRESH_ENABLED || vars.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || secrets.LITEFUPZL_COOKIE_REFRESH_ENABLED || secrets.FUCKPZL_ONESHOT_COOKIE_REFRESH_ENABLED || 'false' }}
       # Usernames: opted into Variables. App logs alias them and the guard redacts them,
       # but the Variable value itself is plaintext (visible in Settings/API, unmasked in logs).
       LITEFUPZL_MUTUAL_LIKE_USERS_JSON: ${{ vars.LITEFUPZL_MUTUAL_LIKE_USERS_JSON || secrets.LITEFUPZL_MUTUAL_LIKE_USERS_JSON || '' }}
@@ -89,7 +93,7 @@ jobs:
           pip install -e ".[test]"
           pip install proxy.py
           sudo apt-get install -y xvfb
-          case "${LITEFUPZL_BROWSER:-chromium}" in
+          case "${LITEFUPZL_BROWSER:-camoufox}" in
             patchright-chromium)
               python -m patchright install --with-deps chromium
               ;;
