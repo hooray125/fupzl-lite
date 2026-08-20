@@ -126,3 +126,42 @@ async def test_final_challenge_recovery_can_require_second_target_request(monkey
 
     assert recovered is True
     assert resumed == ["https://linux.do/challenge", "https://linux.do/challenge"]
+
+
+@pytest.mark.asyncio
+async def test_prime_cf_uses_final_recovery_after_repeated_clearance_navigation(monkeypatch):
+    from litefupzl.browser import navigation
+
+    active = {"active": True, "kind": "clearance_pending", "url": "https://linux.do/challenge"}
+    states = iter([active, active, active, active, active])
+    recovered = []
+
+    class Page:
+        url = "https://linux.do/challenge"
+
+        async def goto(self, *_args, **_kwargs):
+            return None
+
+        async def title(self):
+            return "Just a moment..."
+
+    async def fake_classify(_page):
+        return next(states)
+
+    async def has_clearance(_page, _base_url):
+        return True
+
+    async def fake_resume(_page, _url):
+        return None
+
+    async def fake_recover(_page, url):
+        recovered.append(url)
+        return True
+
+    monkeypatch.setattr(navigation, "classify_cf_challenge", fake_classify)
+    monkeypatch.setattr(navigation, "_has_cf_clearance", has_clearance)
+    monkeypatch.setattr(navigation, "_resume_after_clearance", fake_resume)
+    monkeypatch.setattr(navigation, "_recover_after_challenge_timeout", fake_recover)
+
+    assert await navigation.prime_cf_challenge(Page(), "https://linux.do", timeout_seconds=30)
+    assert recovered == ["https://linux.do/challenge"]

@@ -379,8 +379,8 @@ async def prime_cf_challenge(
         if await _has_cf_clearance(page, base_url):
             logger.info("Challenge prewarm obtained cf_clearance cookie; verifying target navigation")
             if clearance_resume_attempts >= 2:
-                logger.warning("Challenge prewarm clearance did not produce a usable target page")
-                return False
+                logger.warning("Challenge prewarm clearance needs final target recovery")
+                break
             clearance_resume_attempts += 1
             await _resume_after_clearance(page, challenge_url)
             elapsed += 2.0
