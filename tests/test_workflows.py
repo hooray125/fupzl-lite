@@ -191,6 +191,18 @@ def test_actions_and_python_dependencies_are_immutable_in_workflows():
         assert 'pip install -e ".[test]"' not in install
 
 
+def test_warp_trace_ip_is_redacted_before_logs_and_artifacts():
+    sanitizer = "| sed -E 's/^ip=.*/ip=<redacted>/' | tee "
+
+    for filename in ("oneshot.yml", "probes.yml"):
+        raw = (ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+        trace_lines = [line.strip() for line in raw.splitlines() if "cdn-cgi/trace" in line]
+
+        assert trace_lines
+        assert all(sanitizer in line for line in trace_lines)
+        assert all("curl " in line and "warp" in line for line in trace_lines)
+
+
 def test_cleanup_old_workflow_runs_keeps_pagination_and_retention():
     for filename, job in [("oneshot.yml", "oneshot"), ("probes.yml", "probe")]:
         workflow = load_workflow(filename)

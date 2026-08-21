@@ -106,7 +106,7 @@ jobs:
           warp-cli --accept-tos connect || warp-cli connect || true
           sleep 15
           warp-cli --accept-tos status || warp-cli status || true
-          curl -fsSL https://www.cloudflare.com/cdn-cgi/trace | tee warp-trace.txt
+          curl -fsSL https://www.cloudflare.com/cdn-cgi/trace | sed -E 's/^ip=.*/ip=<redacted>/' | tee warp-trace.txt
           grep -q 'warp=on' warp-trace.txt
 
       - name: Install dependencies
@@ -134,7 +134,7 @@ jobs:
         run: |
           nohup python -m proxy --hostname 127.0.0.1 --port 1080 > local-proxy.log 2>&1 &
           sleep 5
-          curl -fsSL -x http://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | tee warp-proxy-trace.txt
+          curl -fsSL -x http://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | sed -E 's/^ip=.*/ip=<redacted>/' | tee warp-proxy-trace.txt
           grep -q 'warp=on' warp-proxy-trace.txt
 
       - name: Run oneshot
