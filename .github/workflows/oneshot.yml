@@ -72,6 +72,12 @@ jobs:
       # but the Variable value itself is plaintext (visible in Settings/API, unmasked in logs).
       LITEFUPZL_MUTUAL_LIKE_USERS_JSON: ${{ vars.LITEFUPZL_MUTUAL_LIKE_USERS_JSON || secrets.LITEFUPZL_MUTUAL_LIKE_USERS_JSON || '' }}
       LITEFUPZL_COOKIE_REFRESH_PROBE_SECRET: LITEFUPZL_COOKIE_REFRESH_PROBE
+      LITEFUPZL_WATCHDOG_STARTUP_SECONDS: ${{ vars.LITEFUPZL_WATCHDOG_STARTUP_SECONDS || '300' }}
+      LITEFUPZL_WATCHDOG_PRE_LOGIN_SECONDS: ${{ vars.LITEFUPZL_WATCHDOG_PRE_LOGIN_SECONDS || '600' }}
+      LITEFUPZL_WATCHDOG_COOKIE_SYNC_SECONDS: ${{ vars.LITEFUPZL_WATCHDOG_COOKIE_SYNC_SECONDS || '120' }}
+      LITEFUPZL_WATCHDOG_DRIVER_CLEANUP_SECONDS: ${{ vars.LITEFUPZL_WATCHDOG_DRIVER_CLEANUP_SECONDS || '60' }}
+      LITEFUPZL_WATCHDOG_POST_LOGIN_GRACE_SECONDS: ${{ vars.LITEFUPZL_WATCHDOG_POST_LOGIN_GRACE_SECONDS || '600' }}
+      LITEFUPZL_WATCHDOG_TERMINATION_GRACE_SECONDS: ${{ vars.LITEFUPZL_WATCHDOG_TERMINATION_GRACE_SECONDS || '10' }}
 
     steps:
       - name: Checkout
@@ -139,9 +145,9 @@ jobs:
           LITEFUPZL_ACTIONS_ADMIN_TOKEN: ${{ secrets.LITEFUPZL_ACTIONS_ADMIN_TOKEN || secrets.FUCKPZL_ACTIONS_ADMIN_TOKEN }}
         run: |
           if [ "${LITEFUPZL_HEADLESS:-true}" = "false" ] && [ "${LITEFUPZL_VIRTUAL_DISPLAY:-true}" != "true" ]; then
-            xvfb-run -a python apps/litefupzl/main.py
+            xvfb-run -a python apps/litefupzl/watchdog.py
           else
-            python apps/litefupzl/main.py
+            python apps/litefupzl/watchdog.py
           fi
 
       - name: Run cookie refresh persistence probe

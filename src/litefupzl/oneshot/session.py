@@ -264,6 +264,7 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
     duration_seconds = slot.duration_minutes * 60
     deadline = slot_start + duration_seconds
     mutual_like_done = False
+    cookie_refresh_checkpoint_succeeded = False
 
     try:
         pw, context, main_page, json_page = await asyncio.wait_for(
@@ -413,6 +414,17 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
         if device_state == "ok":
             recorder.emit(slot.slot_alias, "login-device-proof", "ok", code="ACTIVE_LINUX_DEVICE_OK", public=False)
         recorder.emit(slot.slot_alias, "login-check", "ok")
+
+        cookie_refresh_checkpoint_succeeded = await _refresh_cookie_checkpoint(
+            context,
+            slot,
+            config,
+            result,
+            recorder,
+        )
+        if not cookie_refresh_checkpoint_succeeded:
+            result.status = SlotStatus.RUNTIME_ERROR
+            return _finish_result(result)
 
         try:
             user_info = await asyncio.to_thread(
@@ -682,11 +694,12 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
             recorder.emit(slot.slot_alias, "slot", "failed", level="error", code="RUNTIME_ERROR")
         return _finish_result(result)
     finally:
-        if context is not None and result.login_ok:
+        if context is not None and result.login_ok and cookie_refresh_checkpoint_succeeded:
             try:
                 refreshed = await _maybe_refresh_cookie_secret(context, slot, config)
                 if refreshed:
                     result.cookie_refresh_ok = True
+                    slot.cookie = config.cookies[slot.slot_index - 1]
                     recorder.emit(slot.slot_alias, "cookie-refresh", "ok")
             except Exception as exc:
                 _mark_cookie_refresh_failure(result)
@@ -873,9 +886,15 @@ async def _ensure_logged_in(
     slot_cookies = slot_cookies or _normalize_cookie_dicts(cookie_string)
     _attach_session_current_observer(main_page)
 
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-prewarm", "started")
     await prime_cf_challenge(main_page, _BASE_URL, timeout_seconds=60)
 
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-cookie-bootstrap", "started")
     browser_state = await _bootstrap_cookie_session(main_page, context, slot_cookies)
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-cookie-bootstrap", "finished")
     browser_state = await _require_authenticated_login_proof(main_page, slot_cookies, browser_state)
     if browser_state == "browser_driver_crashed":
         return browser_state
@@ -2014,3 +2033,35 @@ async def _maybe_refresh_cookie_secret(context, slot: SlotConfig, config) -> boo
         api_url=api_url,
         base_url=_BASE_URL,
     )
+
+
+async def _refresh_cookie_checkpoint(
+    context,
+    slot: SlotConfig,
+    config,
+    result: SlotResult,
+    recorder: PublicRecorder,
+) -> bool:
+    """Persist a rotated durable cookie immediately after login proof."""
+    if not getattr(config, "cookie_refresh_enabled", False):
+        recorder.emit(slot.slot_alias, "cookie-refresh", "skipped", code="DISABLED")
+        return True
+    try:
+        refreshed = await _maybe_refresh_cookie_secret(context, slot, config)
+    except Exception as exc:
+        _mark_cookie_refresh_failure(result)
+        recorder.emit(
+            slot.slot_alias,
+            "cookie-refresh",
+            "warning",
+            level="warning",
+            code=getattr(exc, "safe_code", f"COOKIE_REFRESH_{type(exc).__name__.upper()}"),
+        )
+        return False
+    if refreshed:
+        result.cookie_refresh_ok = True
+        slot.cookie = config.cookies[slot.slot_index - 1]
+        recorder.emit(slot.slot_alias, "cookie-refresh", "ok")
+    else:
+        recorder.emit(slot.slot_alias, "cookie-refresh", "unchanged")
+    return True

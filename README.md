@@ -18,6 +18,8 @@ write action is the bounded mutual-like pass described below.
 - Default-on cookie refresh from the already-authenticated browser context; set it to `false` to disable write-back.
 - Manual and scheduled runs share the same cookie-refresh switch.
 - A Playwright browser-driver crash is classified separately from an invalid cookie and retried once with a fresh browser session.
+- Scheduled oneshot runs use an OS-process watchdog so a wedged Playwright RPC cannot hold the job for hours.
+- A rotated durable cookie is checkpointed immediately after login proof, before the read loop begins.
 - GitHub Actions run cleanup with recent-run retention.
 - Artifact upload is disabled by default and must be enabled per manual run.
 
@@ -66,6 +68,14 @@ session but do not persist a rotated production `_t`; the scheduled oneshot
 therefore never launches them automatically after a failure. The main runner
 retries only a classified browser-driver crash and does not retry a confirmed
 invalid cookie.
+
+GitHub Actions launches `apps/litefupzl/watchdog.py`, which supervises the
+credentialed runner as a separate process group. The default hard limits are
+five minutes for startup, ten minutes for pre-login/browser RPC work, two
+minutes for the post-login cookie checkpoint, one minute for cleanup after a
+reported driver crash, and the configured read duration plus ten minutes after
+the checkpoint. A hard timeout exits nonzero and writes only redacted phase
+metadata to `watchdog_state.json`.
 
 ## Cookie format
 

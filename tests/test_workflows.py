@@ -258,3 +258,14 @@ def test_manual_oneshot_supports_browser_and_runner_matrix_overrides():
     job = workflow["jobs"]["oneshot"]
     assert "inputs.runner_os" in job["runs-on"]
     assert "inputs.browser_backend" in job["env"]["LITEFUPZL_BROWSER"]
+
+
+def test_oneshot_runs_through_hard_watchdog():
+    workflow = load_workflow("oneshot.yml")
+    run = _step(workflow, "oneshot", "Run oneshot")["run"]
+    assert "apps/litefupzl/watchdog.py" in run
+    assert "apps/litefupzl/main.py" not in run
+    env = workflow["jobs"]["oneshot"]["env"]
+    assert env["LITEFUPZL_WATCHDOG_PRE_LOGIN_SECONDS"].endswith("|| '600' }}")
+    assert env["LITEFUPZL_WATCHDOG_COOKIE_SYNC_SECONDS"].endswith("|| '120' }}")
+    assert env["LITEFUPZL_WATCHDOG_DRIVER_CLEANUP_SECONDS"].endswith("|| '60' }}")

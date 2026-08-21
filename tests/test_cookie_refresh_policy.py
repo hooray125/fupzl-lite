@@ -95,3 +95,57 @@ def test_cookie_refresh_failure_escalates_successful_slot_to_warning():
 
     assert result.status is SlotStatus.WARNING
     assert result.warning_codes == [WarningCode.COOKIE_REFRESH_FAILED.value]
+
+
+@pytest.mark.asyncio
+async def test_post_login_cookie_checkpoint_updates_slot_source(monkeypatch):
+    from litefupzl.oneshot import session
+
+    class Recorder:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, slot, step, status, **kwargs):
+            self.events.append((slot, step, status, kwargs))
+
+    config = SimpleNamespace(cookie_refresh_enabled=True, cookies=["_t=old"])
+    slot = SlotConfig(slot_index=1, slot_alias="slot-001", cookie="_t=old", duration_minutes=1)
+    result = SlotResult(slot_index=1, slot_alias="slot-001", started_at=utc_now_iso())
+    recorder = Recorder()
+
+    async def refreshed(*_args, **_kwargs):
+        config.cookies[0] = "_t=new"
+        return True
+
+    monkeypatch.setattr(session, "_maybe_refresh_cookie_secret", refreshed)
+
+    assert await session._refresh_cookie_checkpoint(object(), slot, config, result, recorder) is True
+    assert slot.cookie == "_t=new"
+    assert result.cookie_refresh_ok is True
+    assert any(event[1:3] == ("cookie-refresh", "ok") for event in recorder.events)
+
+
+@pytest.mark.asyncio
+async def test_post_login_cookie_checkpoint_failure_stops_slot(monkeypatch):
+    from litefupzl.oneshot import session
+
+    class Recorder:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, slot, step, status, **kwargs):
+            self.events.append((slot, step, status, kwargs))
+
+    config = SimpleNamespace(cookie_refresh_enabled=True, cookies=["_t=old"])
+    slot = SlotConfig(slot_index=1, slot_alias="slot-001", cookie="_t=old", duration_minutes=1)
+    result = SlotResult(slot_index=1, slot_alias="slot-001", started_at=utc_now_iso())
+    recorder = Recorder()
+
+    async def rejected(*_args, **_kwargs):
+        raise session.CookieRefreshError("COOKIE_REFRESH_HTTP_401")
+
+    monkeypatch.setattr(session, "_maybe_refresh_cookie_secret", rejected)
+
+    assert await session._refresh_cookie_checkpoint(object(), slot, config, result, recorder) is False
+    assert WarningCode.COOKIE_REFRESH_FAILED.value in result.warning_codes
+    assert any(event[3].get("code") == "COOKIE_REFRESH_HTTP_401" for event in recorder.events)
