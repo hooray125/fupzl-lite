@@ -19,6 +19,7 @@ def test_watchdog_returns_child_exit_and_records_synced_phase(tmp_path, monkeypa
         command=_command(
             "2026-08-21T00:00:00Z | INFO | slot-001 login-prewarm started",
             "2026-08-21T00:00:01Z | INFO | slot-001 login-check ok",
+            "2026-08-21T00:00:02Z | INFO | slot-001 slot warning",
             "2026-08-21T00:00:02Z | INFO | slot-001 cookie-refresh unchanged",
         ),
         output_dir=tmp_path,
@@ -34,6 +35,55 @@ def test_watchdog_returns_child_exit_and_records_synced_phase(tmp_path, monkeypa
     assert result == 0
     assert state["phase"] == "authenticated_synced"
     assert state["timed_out"] is False
+
+
+def test_watchdog_allows_authenticated_read_until_final_cookie_sync(tmp_path, monkeypatch):
+    from apps.litefupzl.watchdog import run_watchdog
+
+    monkeypatch.setenv("LITEFUPZL_DURATION_MINUTES", "0.001")
+    result = run_watchdog(
+        command=_command(
+            "2026-08-21T00:00:00Z | INFO | slot-001 login-check ok",
+            sleep_seconds=30,
+        ),
+        output_dir=tmp_path,
+        startup_seconds=1,
+        pre_login_seconds=1,
+        cookie_sync_seconds=0.05,
+        post_login_grace_seconds=0.05,
+        termination_grace_seconds=0.1,
+        poll_seconds=0.01,
+    )
+
+    state = json.loads((tmp_path / "watchdog_state.json").read_text())
+    assert result == 124
+    assert state["phase"] == "authenticated_unsynced"
+    assert state["timeout_code"] == "COOKIE_STATE_UNCERTAIN_DRIVER_HANG"
+
+
+def test_watchdog_bounds_final_cookie_sync_after_slot_completion(tmp_path, monkeypatch):
+    from apps.litefupzl.watchdog import run_watchdog
+
+    monkeypatch.setenv("LITEFUPZL_DURATION_MINUTES", "1")
+    result = run_watchdog(
+        command=_command(
+            "2026-08-21T00:00:00Z | INFO | slot-001 login-check ok",
+            "2026-08-21T00:00:01Z | INFO | slot-001 slot warning",
+            sleep_seconds=30,
+        ),
+        output_dir=tmp_path,
+        startup_seconds=1,
+        pre_login_seconds=1,
+        cookie_sync_seconds=0.15,
+        post_login_grace_seconds=1,
+        termination_grace_seconds=0.1,
+        poll_seconds=0.01,
+    )
+
+    state = json.loads((tmp_path / "watchdog_state.json").read_text())
+    assert result == 124
+    assert state["phase"] == "slot_complete"
+    assert state["timeout_code"] == "COOKIE_STATE_UNCERTAIN_DRIVER_HANG"
 
 
 def test_watchdog_hard_kills_pre_auth_driver_hang(tmp_path):

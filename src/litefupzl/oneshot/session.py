@@ -264,7 +264,6 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
     duration_seconds = slot.duration_minutes * 60
     deadline = slot_start + duration_seconds
     mutual_like_done = False
-    cookie_refresh_checkpoint_succeeded = False
 
     try:
         pw, context, main_page, json_page = await asyncio.wait_for(
@@ -414,17 +413,6 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
         if device_state == "ok":
             recorder.emit(slot.slot_alias, "login-device-proof", "ok", code="ACTIVE_LINUX_DEVICE_OK", public=False)
         recorder.emit(slot.slot_alias, "login-check", "ok")
-
-        cookie_refresh_checkpoint_succeeded = await _refresh_cookie_checkpoint(
-            context,
-            slot,
-            config,
-            result,
-            recorder,
-        )
-        if not cookie_refresh_checkpoint_succeeded:
-            result.status = SlotStatus.RUNTIME_ERROR
-            return _finish_result(result)
 
         try:
             user_info = await asyncio.to_thread(
@@ -694,22 +682,8 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
             recorder.emit(slot.slot_alias, "slot", "failed", level="error", code="RUNTIME_ERROR")
         return _finish_result(result)
     finally:
-        if context is not None and result.login_ok and cookie_refresh_checkpoint_succeeded:
-            try:
-                refreshed = await _maybe_refresh_cookie_secret(context, slot, config)
-                if refreshed:
-                    result.cookie_refresh_ok = True
-                    slot.cookie = config.cookies[slot.slot_index - 1]
-                    recorder.emit(slot.slot_alias, "cookie-refresh", "ok")
-            except Exception as exc:
-                _mark_cookie_refresh_failure(result)
-                recorder.emit(
-                    slot.slot_alias,
-                    "cookie-refresh",
-                    "warning",
-                    level="warning",
-                    code=getattr(exc, "safe_code", f"COOKIE_REFRESH_{type(exc).__name__.upper()}"),
-                )
+        if context is not None and result.login_ok:
+            await _finalize_cookie_refresh(context, slot, config, result, recorder)
         if json_page is not None:
             try:
                 await json_page.close()
@@ -2035,14 +2009,21 @@ async def _maybe_refresh_cookie_secret(context, slot: SlotConfig, config) -> boo
     )
 
 
-async def _refresh_cookie_checkpoint(
+async def _finalize_cookie_refresh(
     context,
     slot: SlotConfig,
     config,
     result: SlotResult,
     recorder: PublicRecorder,
 ) -> bool:
-    """Persist a rotated durable cookie immediately after login proof."""
+    """Persist the final same-context durable cookie before browser teardown.
+
+    Do not update the repository Secret immediately after login. The live
+    browser may continue using or rotating its authenticated token during the
+    read loop. Persisting only the final same-context value avoids replacing a
+    known-good Secret with an early candidate that has not survived the full
+    session.
+    """
     if not getattr(config, "cookie_refresh_enabled", False):
         recorder.emit(slot.slot_alias, "cookie-refresh", "skipped", code="DISABLED")
         return True

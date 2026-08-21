@@ -244,11 +244,20 @@ def run_watchdog(
                 }:
                     deadline = now + pre_login_limit
                 elif state.phase == "authenticated_unsynced":
-                    deadline = now + cookie_sync_limit
+                    # The durable cookie is intentionally synchronized only at
+                    # the end of the live browser session. Bound the complete
+                    # authenticated read instead of forcing an unsafe early
+                    # Secret write merely to satisfy a short checkpoint.
+                    deadline = now + _duration_seconds() + post_login_grace
                 elif state.phase == "driver_crashed_cleanup":
                     deadline = now + driver_cleanup_limit
                 elif state.phase == "authenticated_synced":
-                    deadline = now + _duration_seconds() + post_login_grace
+                    deadline = now + startup_limit
+                elif state.phase == "slot_complete":
+                    # A slot result is emitted before its finally block writes
+                    # the final Cookie Secret. Bound that narrow finalization
+                    # window separately.
+                    deadline = now + cookie_sync_limit
                 else:
                     deadline = now + startup_limit
                 _write_state(output_path, state)

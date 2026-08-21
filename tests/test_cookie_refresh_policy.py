@@ -98,7 +98,7 @@ def test_cookie_refresh_failure_escalates_successful_slot_to_warning():
 
 
 @pytest.mark.asyncio
-async def test_post_login_cookie_checkpoint_updates_slot_source(monkeypatch):
+async def test_final_cookie_refresh_updates_slot_source(monkeypatch):
     from litefupzl.oneshot import session
 
     class Recorder:
@@ -119,14 +119,14 @@ async def test_post_login_cookie_checkpoint_updates_slot_source(monkeypatch):
 
     monkeypatch.setattr(session, "_maybe_refresh_cookie_secret", refreshed)
 
-    assert await session._refresh_cookie_checkpoint(object(), slot, config, result, recorder) is True
+    assert await session._finalize_cookie_refresh(object(), slot, config, result, recorder) is True
     assert slot.cookie == "_t=new"
     assert result.cookie_refresh_ok is True
     assert any(event[1:3] == ("cookie-refresh", "ok") for event in recorder.events)
 
 
 @pytest.mark.asyncio
-async def test_post_login_cookie_checkpoint_failure_stops_slot(monkeypatch):
+async def test_final_cookie_refresh_failure_marks_slot_warning(monkeypatch):
     from litefupzl.oneshot import session
 
     class Recorder:
@@ -146,6 +146,31 @@ async def test_post_login_cookie_checkpoint_failure_stops_slot(monkeypatch):
 
     monkeypatch.setattr(session, "_maybe_refresh_cookie_secret", rejected)
 
-    assert await session._refresh_cookie_checkpoint(object(), slot, config, result, recorder) is False
+    assert await session._finalize_cookie_refresh(object(), slot, config, result, recorder) is False
     assert WarningCode.COOKIE_REFRESH_FAILED.value in result.warning_codes
     assert any(event[3].get("code") == "COOKIE_REFRESH_HTTP_401" for event in recorder.events)
+
+
+@pytest.mark.asyncio
+async def test_final_cookie_refresh_emits_terminal_marker_when_unchanged(monkeypatch):
+    from litefupzl.oneshot import session
+
+    class Recorder:
+        def __init__(self):
+            self.events = []
+
+        def emit(self, slot, step, status, **kwargs):
+            self.events.append((slot, step, status, kwargs))
+
+    config = SimpleNamespace(cookie_refresh_enabled=True, cookies=["_t=current"])
+    slot = SlotConfig(slot_index=1, slot_alias="slot-001", cookie="_t=current", duration_minutes=1)
+    result = SlotResult(slot_index=1, slot_alias="slot-001", started_at=utc_now_iso())
+    recorder = Recorder()
+
+    async def unchanged(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(session, "_maybe_refresh_cookie_secret", unchanged)
+
+    assert await session._finalize_cookie_refresh(object(), slot, config, result, recorder) is True
+    assert any(event[1:3] == ("cookie-refresh", "unchanged") for event in recorder.events)
