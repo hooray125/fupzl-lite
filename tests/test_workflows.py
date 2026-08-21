@@ -232,6 +232,7 @@ def test_oneshot_workflow_does_not_run_unsafe_failure_auth_probe():
 def test_driver_matrix_is_unauthenticated_and_covers_runner_browser_controls():
     workflow = load_workflow("probes.yml")
     assert "driver-matrix" in workflow[True]["workflow_dispatch"]["inputs"]["probe"]["options"]
+    assert "watchdog-selftest" in workflow[True]["workflow_dispatch"]["inputs"]["probe"]["options"]
 
     job = workflow["jobs"]["driver-matrix"]
     assert job["if"] == "inputs.probe == 'driver-matrix'"
@@ -248,6 +249,13 @@ def test_driver_matrix_is_unauthenticated_and_covers_runner_browser_controls():
     assert "LITEFUPZL_ACTIONS_ADMIN_TOKEN" not in matrix_text
     assert "cf_probe.py" in matrix_text
     assert "driver_crash_detected" in matrix_text
+
+    watchdog = workflow["jobs"]["watchdog-selftest"]
+    watchdog_text = str(watchdog)
+    assert "LITEFUPZL_COOKIES_JSON" not in watchdog_text
+    assert "LITEFUPZL_ACTIONS_ADMIN_TOKEN" not in watchdog_text
+    assert "run_watchdog" in watchdog_text
+    assert "BROWSER_DRIVER_HANG_PRE_AUTH" in watchdog_text
 
 
 def test_manual_oneshot_supports_browser_and_runner_matrix_overrides():
