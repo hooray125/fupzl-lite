@@ -227,3 +227,34 @@ def test_oneshot_workflow_does_not_run_unsafe_failure_auth_probe():
     assert run_oneshot["id"] == "run_oneshot"
     assert not any(step.get("name") == "Run auth probe" for step in _steps(workflow, "oneshot"))
     assert "auth_probe.py" not in run_oneshot["run"]
+
+
+def test_driver_matrix_is_unauthenticated_and_covers_runner_browser_controls():
+    workflow = load_workflow("probes.yml")
+    assert "driver-matrix" in workflow[True]["workflow_dispatch"]["inputs"]["probe"]["options"]
+
+    job = workflow["jobs"]["driver-matrix"]
+    assert job["if"] == "inputs.probe == 'driver-matrix'"
+    assert job["strategy"]["fail-fast"] is False
+    entries = job["strategy"]["matrix"]["include"]
+    combinations = [(entry["os"], entry["browser"]) for entry in entries]
+    assert combinations.count(("ubuntu-24.04", "camoufox")) == 3
+    assert combinations.count(("ubuntu-22.04", "camoufox")) == 3
+    assert combinations.count(("ubuntu-24.04", "firefox")) == 2
+    assert combinations.count(("ubuntu-24.04", "patchright-chromium")) == 2
+
+    matrix_text = str(job)
+    assert "LITEFUPZL_COOKIES_JSON" not in matrix_text
+    assert "LITEFUPZL_ACTIONS_ADMIN_TOKEN" not in matrix_text
+    assert "cf_probe.py" in matrix_text
+    assert "driver_crash_detected" in matrix_text
+
+
+def test_manual_oneshot_supports_browser_and_runner_matrix_overrides():
+    workflow = load_workflow("oneshot.yml")
+    inputs = workflow[True]["workflow_dispatch"]["inputs"]
+    assert inputs["browser_backend"]["options"] == ["configured", "camoufox", "firefox", "patchright-chromium"]
+    assert inputs["runner_os"]["options"] == ["ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04"]
+    job = workflow["jobs"]["oneshot"]
+    assert "inputs.runner_os" in job["runs-on"]
+    assert "inputs.browser_backend" in job["env"]["LITEFUPZL_BROWSER"]
