@@ -10,7 +10,7 @@ from click.exceptions import Exit
 
 from litefupzl.oneshot.env_loader import load_oneshot_env
 from litefupzl.oneshot.logging import PublicRecorder, configure_public_logger, tally_run_result
-from litefupzl.oneshot.models import RunResult, SlotConfig, SlotResult, SlotStatus, utc_now_iso
+from litefupzl.oneshot.models import RunResult, SlotConfig, SlotResult, SlotStatus, WarningCode, utc_now_iso
 from litefupzl.oneshot.redaction import slot_alias
 from litefupzl.oneshot.session import run_slot_session
 
@@ -36,18 +36,33 @@ async def run_oneshot(*, session_runner: SessionRunner = run_slot_session) -> in
     with configure_public_logger():
         recorder.emit("system", "config", "loaded")
         for slot in slots:
-            try:
-                result = await session_runner(slot, config, recorder)
-            except Exception:
-                recorder.emit(slot.slot_alias, "slot", "failed", level="error", code="RUNTIME_ERROR")
-                result = SlotResult(
-                    slot_index=slot.slot_index,
-                    slot_alias=slot.slot_alias,
-                    started_at=utc_now_iso(),
-                    finished_at=utc_now_iso(),
-                    status=SlotStatus.RUNTIME_ERROR,
-                    warning_codes=["RUNTIME_WARNING"],
-                )
+            attempt = 0
+            while True:
+                try:
+                    result = await session_runner(slot, config, recorder)
+                except Exception:
+                    recorder.emit(slot.slot_alias, "slot", "failed", level="error", code="RUNTIME_ERROR")
+                    result = SlotResult(
+                        slot_index=slot.slot_index,
+                        slot_alias=slot.slot_alias,
+                        started_at=utc_now_iso(),
+                        finished_at=utc_now_iso(),
+                        status=SlotStatus.RUNTIME_ERROR,
+                        warning_codes=["RUNTIME_WARNING"],
+                    )
+                if (
+                    attempt == 0
+                    and WarningCode.BROWSER_DRIVER_CRASH.value in result.warning_codes
+                ):
+                    attempt += 1
+                    recorder.emit(
+                        slot.slot_alias,
+                        "browser-driver-retry",
+                        "started",
+                        code="ATTEMPT_2_OF_2",
+                    )
+                    continue
+                break
             run_result.slot_results.append(result)
 
         run_result.finished_at = utc_now_iso()

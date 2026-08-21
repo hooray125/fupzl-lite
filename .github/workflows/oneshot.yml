@@ -125,17 +125,6 @@ jobs:
             python apps/litefupzl/main.py
           fi
 
-      - name: Run auth probe
-        if: failure() && steps.run_oneshot.outcome == 'failure'
-        env:
-          LITEFUPZL_COOKIES_JSON: ${{ secrets.LITEFUPZL_COOKIES_JSON || secrets.FUCKPZL_ONESHOT_COOKIES_JSON }}
-        run: |
-          if [ "${LITEFUPZL_HEADLESS:-true}" = "false" ] && [ "${LITEFUPZL_VIRTUAL_DISPLAY:-true}" != "true" ]; then
-            xvfb-run -a python apps/litefupzl/auth_probe.py
-          else
-            python apps/litefupzl/auth_probe.py
-          fi
-
       - name: Run cookie refresh persistence probe
         if: always() && github.event_name == 'workflow_dispatch' && inputs.cookie_refresh_probe == 'true'
         env:

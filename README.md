@@ -17,6 +17,7 @@ write action is the bounded mutual-like pass described below.
 - Per-browser `/topics/timings` status diagnostics in redacted logs.
 - Default-on cookie refresh from the already-authenticated browser context; set it to `false` to disable write-back.
 - Manual and scheduled runs share the same cookie-refresh switch.
+- A Playwright browser-driver crash is classified separately from an invalid cookie and retried once with a fresh browser session.
 - GitHub Actions run cleanup with recent-run retention.
 - Artifact upload is disabled by default and must be enabled per manual run.
 
@@ -59,6 +60,12 @@ python apps/litefupzl/auth_probe.py
 python apps/litefupzl/probe_browser.py
 python apps/litefupzl/cf_probe.py
 ```
+
+Authenticated diagnostics are manual tools. They can create a real browser
+session but do not persist a rotated production `_t`; the scheduled oneshot
+therefore never launches them automatically after a failure. The main runner
+retries only a classified browser-driver crash and does not retry a confirmed
+invalid cookie.
 
 ## Cookie format
 

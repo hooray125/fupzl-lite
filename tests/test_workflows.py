@@ -220,12 +220,10 @@ def test_workflows_install_selected_browser_backend():
         assert "playwright install --with-deps chromium" in script
 
 
-def test_oneshot_workflow_runs_auth_probe_only_after_oneshot_failure():
+def test_oneshot_workflow_does_not_run_unsafe_failure_auth_probe():
     workflow = load_workflow("oneshot.yml")
     run_oneshot = _step(workflow, "oneshot", "Run oneshot")
-    auth_probe = _step(workflow, "oneshot", "Run auth probe")
 
     assert run_oneshot["id"] == "run_oneshot"
-    assert "always()" not in auth_probe["if"]
-    assert "steps.run_oneshot.outcome == 'failure'" in auth_probe["if"]
-    assert "failure()" in auth_probe["if"]
+    assert not any(step.get("name") == "Run auth probe" for step in _steps(workflow, "oneshot"))
+    assert "auth_probe.py" not in run_oneshot["run"]

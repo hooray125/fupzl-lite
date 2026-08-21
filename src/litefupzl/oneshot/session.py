@@ -49,6 +49,16 @@ _ONESHOT_LOGIN_TIMEOUT_SECONDS = 420
 _ONESHOT_BROWSER_SESSION_PROBE_TIMEOUT_SECONDS = 12
 _ONESHOT_TOPIC_TIMINGS_CONFIRM_TIMEOUT_SECONDS = 5
 _ONESHOT_VOLATILE_COOKIE_NAMES = {"_forum_session", "cf_clearance"}
+_BROWSER_DRIVER_FAILURE_MARKERS = (
+    "connection closed while reading from the driver",
+    "pipe closed by peer",
+    "playwright connection closed",
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "driver process exited",
+    "driver process has exited",
+    "transport closed",
+)
 _CHROMIUM_STEALTH_INIT_SCRIPT = """
 Object.defineProperty(navigator, 'webdriver', {
   get: () => undefined,
@@ -79,6 +89,54 @@ class _CompositeController:
         finally:
             if self._virtual_display is not None:
                 self._virtual_display.stop()
+
+
+def _is_browser_driver_failure(exc: BaseException) -> bool:
+    """Identify Playwright transport/process failures without matching timeouts."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        name = type(current).__name__.lower()
+        message = str(current).lower()
+        if name in {"targetclosederror", "browserclosederror"}:
+            return True
+        if any(marker in message for marker in _BROWSER_DRIVER_FAILURE_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _mark_browser_driver_failure(page, exc: BaseException) -> bool:
+    if not _is_browser_driver_failure(exc):
+        return False
+    try:
+        setattr(page, "_litefupzl_browser_driver_crashed", True)
+    except Exception:
+        pass
+    return True
+
+
+def _browser_driver_failed(page) -> bool:
+    try:
+        return bool(getattr(page, "_litefupzl_browser_driver_crashed", False))
+    except Exception:
+        return False
+
+
+def _cookie_invalid_or_driver_crash(page) -> str:
+    return "browser_driver_crashed" if _browser_driver_failed(page) else "cookie_invalid"
+
+
+async def _browser_driver_usable(page) -> bool:
+    if _browser_driver_failed(page):
+        return False
+    try:
+        await page.title()
+    except Exception as exc:
+        if _mark_browser_driver_failure(page, exc):
+            return False
+    return True
 
 
 def _new_topic_target(config) -> int:
@@ -171,6 +229,22 @@ def _mark_cookie_refresh_failure(result: SlotResult) -> None:
         result.status = SlotStatus.WARNING
 
 
+def _mark_browser_driver_crash(
+    result: SlotResult,
+    recorder: PublicRecorder,
+    slot_alias: str,
+) -> None:
+    result.status = SlotStatus.RUNTIME_ERROR
+    result.warning_codes.append(WarningCode.BROWSER_DRIVER_CRASH.value)
+    recorder.emit(
+        slot_alias,
+        "browser-driver",
+        "crashed",
+        level="error",
+        code=WarningCode.BROWSER_DRIVER_CRASH.value,
+    )
+
+
 async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -> SlotResult:
     """Execute one cookie slot in oneshot mode."""
     new_topic_target = _new_topic_target(config)
@@ -227,9 +301,15 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                 timeout=_ONESHOT_LOGIN_TIMEOUT_SECONDS,
             )
         except TimeoutError:
+            if _browser_driver_failed(main_page):
+                _mark_browser_driver_crash(result, recorder, slot.slot_alias)
+                return _finish_result(result)
             result.status = SlotStatus.RUNTIME_ERROR
             result.warning_codes.append(WarningCode.RUNTIME_WARNING.value)
             recorder.emit(slot.slot_alias, "login-check", "warning", level="warning", code="LOGIN_TIMEOUT")
+            return _finish_result(result)
+        if login_state == "browser_driver_crashed":
+            _mark_browser_driver_crash(result, recorder, slot.slot_alias)
             return _finish_result(result)
         if login_state == "cookie_invalid":
             result.status = SlotStatus.COOKIE_INVALID
@@ -593,10 +673,13 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
         result.status = SlotStatus.CF_BLOCKED
         recorder.emit(slot.slot_alias, "slot", "warning", level="warning", code=WarningCode.CF_BLOCKED.value)
         return _finish_result(result)
-    except Exception:
-        result.warning_codes.append(WarningCode.RUNTIME_WARNING.value)
-        result.status = SlotStatus.RUNTIME_ERROR
-        recorder.emit(slot.slot_alias, "slot", "failed", level="error", code="RUNTIME_ERROR")
+    except Exception as exc:
+        if _is_browser_driver_failure(exc) or (main_page is not None and _browser_driver_failed(main_page)):
+            _mark_browser_driver_crash(result, recorder, slot.slot_alias)
+        else:
+            result.warning_codes.append(WarningCode.RUNTIME_WARNING.value)
+            result.status = SlotStatus.RUNTIME_ERROR
+            recorder.emit(slot.slot_alias, "slot", "failed", level="error", code="RUNTIME_ERROR")
         return _finish_result(result)
     finally:
         if context is not None and result.login_ok:
@@ -794,11 +877,13 @@ async def _ensure_logged_in(
 
     browser_state = await _bootstrap_cookie_session(main_page, context, slot_cookies)
     browser_state = await _require_authenticated_login_proof(main_page, slot_cookies, browser_state)
+    if browser_state == "browser_driver_crashed":
+        return browser_state
     if browser_state == "proof_failed":
         browser_state = "cookie_invalid"
     _emit_login_probe(recorder, slot_alias, "bootstrap", browser_state)
     if await _browser_rejected_login_cookie(main_page, browser_state):
-        return "cookie_invalid"
+        return _cookie_invalid_or_driver_crash(main_page)
     if browser_state == "ok":
         return "ok"
     if browser_state == "cf_blocked":
@@ -807,7 +892,7 @@ async def _ensure_logged_in(
             browser_state = "cookie_invalid"
         _emit_login_probe(recorder, slot_alias, "bootstrap-cf-retry", browser_state)
         if await _browser_rejected_login_cookie(main_page, browser_state):
-            return "cookie_invalid"
+            return _cookie_invalid_or_driver_crash(main_page)
         if browser_state == "ok":
             return "ok"
         if browser_state == "cf_blocked":
@@ -818,7 +903,7 @@ async def _ensure_logged_in(
         if browser_state == "proof_failed":
             browser_state = "cookie_invalid"
         if await _browser_rejected_login_cookie(main_page, browser_state):
-            return "cookie_invalid"
+            return _cookie_invalid_or_driver_crash(main_page)
         if browser_state == "ok":
             return "ok"
         if browser_state == "cf_blocked":
@@ -827,7 +912,7 @@ async def _ensure_logged_in(
                 browser_state = "cookie_invalid"
             _emit_login_probe(recorder, slot_alias, "rate-limit-cf-retry", browser_state)
             if await _browser_rejected_login_cookie(main_page, browser_state):
-                return "cookie_invalid"
+                return _cookie_invalid_or_driver_crash(main_page)
             if browser_state == "ok":
                 return "ok"
             if browser_state == "cf_blocked":
@@ -840,11 +925,13 @@ async def _ensure_logged_in(
 
     browser_state = await _wait_for_browser_login(main_page, timeout_seconds=35)
     browser_state = await _require_authenticated_login_proof(main_page, slot_cookies, browser_state)
+    if browser_state == "browser_driver_crashed":
+        return browser_state
     if browser_state == "proof_failed":
         browser_state = "cookie_invalid"
     _emit_login_probe(recorder, slot_alias, "home", browser_state)
     if await _browser_rejected_login_cookie(main_page, browser_state):
-        return "cookie_invalid"
+        return _cookie_invalid_or_driver_crash(main_page)
     if browser_state == "ok":
         return "ok"
     if browser_state == "cf_blocked":
@@ -853,7 +940,7 @@ async def _ensure_logged_in(
             browser_state = "cookie_invalid"
         _emit_login_probe(recorder, slot_alias, "home-cf-retry", browser_state)
         if await _browser_rejected_login_cookie(main_page, browser_state):
-            return "cookie_invalid"
+            return _cookie_invalid_or_driver_crash(main_page)
         if browser_state == "ok":
             return "ok"
         if browser_state == "cf_blocked":
@@ -864,7 +951,7 @@ async def _ensure_logged_in(
         if browser_state == "proof_failed":
             browser_state = "cookie_invalid"
         if await _browser_rejected_login_cookie(main_page, browser_state):
-            return "cookie_invalid"
+            return _cookie_invalid_or_driver_crash(main_page)
         if browser_state == "ok":
             return "ok"
         if browser_state == "cf_blocked":
@@ -873,7 +960,7 @@ async def _ensure_logged_in(
                 browser_state = "cookie_invalid"
             _emit_login_probe(recorder, slot_alias, "home-rate-limit-cf-retry", browser_state)
             if await _browser_rejected_login_cookie(main_page, browser_state):
-                return "cookie_invalid"
+                return _cookie_invalid_or_driver_crash(main_page)
             if browser_state == "ok":
                 return "ok"
             if browser_state == "cf_blocked":
@@ -886,11 +973,13 @@ async def _ensure_logged_in(
 
     browser_state = await _wait_for_browser_login(main_page, timeout_seconds=25)
     browser_state = await _require_authenticated_login_proof(main_page, slot_cookies, browser_state)
+    if browser_state == "browser_driver_crashed":
+        return browser_state
     if browser_state == "proof_failed":
         browser_state = "cookie_invalid"
     _emit_login_probe(recorder, slot_alias, "login-page", browser_state)
     if await _browser_rejected_login_cookie(main_page, browser_state):
-        return "cookie_invalid"
+        return _cookie_invalid_or_driver_crash(main_page)
     if browser_state == "ok":
         return "ok"
     if browser_state == "cf_blocked":
@@ -899,7 +988,7 @@ async def _ensure_logged_in(
             browser_state = "cookie_invalid"
         _emit_login_probe(recorder, slot_alias, "login-page-cf-retry", browser_state)
         if await _browser_rejected_login_cookie(main_page, browser_state):
-            return "cookie_invalid"
+            return _cookie_invalid_or_driver_crash(main_page)
         if browser_state == "ok":
             return "ok"
         if browser_state == "cf_blocked":
@@ -910,7 +999,7 @@ async def _ensure_logged_in(
         if browser_state == "proof_failed":
             browser_state = "cookie_invalid"
         if await _browser_rejected_login_cookie(main_page, browser_state):
-            return "cookie_invalid"
+            return _cookie_invalid_or_driver_crash(main_page)
         if browser_state == "ok":
             return "ok"
         if browser_state == "cf_blocked":
@@ -919,7 +1008,7 @@ async def _ensure_logged_in(
                 browser_state = "cookie_invalid"
             _emit_login_probe(recorder, slot_alias, "login-page-rate-limit-cf-retry", browser_state)
             if await _browser_rejected_login_cookie(main_page, browser_state):
-                return "cookie_invalid"
+                return _cookie_invalid_or_driver_crash(main_page)
             if browser_state == "ok":
                 return "ok"
             if browser_state == "cf_blocked":
@@ -937,7 +1026,7 @@ async def _ensure_logged_in(
         # HTTP-only success is not enough for oneshot: the later read must run
         # in this same Playwright page/context after browser-auth proof.
         _emit_login_probe(recorder, slot_alias, "http-only", http_state)
-        return "cookie_invalid"
+        return _cookie_invalid_or_driver_crash(main_page)
     _emit_login_probe(recorder, slot_alias, "http", http_state)
 
     if http_state == "rate_limited":
@@ -952,7 +1041,7 @@ async def _ensure_logged_in(
             if browser_state == "proof_failed":
                 browser_state = "cookie_invalid"
             if await _browser_rejected_login_cookie(main_page, browser_state):
-                return "cookie_invalid"
+                return _cookie_invalid_or_driver_crash(main_page)
             if browser_state == "ok":
                 return "ok"
             if browser_state == "cf_blocked":
@@ -961,7 +1050,7 @@ async def _ensure_logged_in(
                     browser_state = "cookie_invalid"
                 _emit_login_probe(recorder, slot_alias, "http-rate-limit-cf-retry", browser_state)
                 if await _browser_rejected_login_cookie(main_page, browser_state):
-                    return "cookie_invalid"
+                    return _cookie_invalid_or_driver_crash(main_page)
                 if browser_state == "ok":
                     return "ok"
                 if browser_state == "cf_blocked":
@@ -973,7 +1062,7 @@ async def _ensure_logged_in(
             )
             if http_state == "ok":
                 _emit_login_probe(recorder, slot_alias, "http-only", http_state)
-                return "cookie_invalid"
+                return _cookie_invalid_or_driver_crash(main_page)
             if http_state != "rate_limited":
                 _emit_login_probe(recorder, slot_alias, "http", http_state)
                 break
@@ -998,10 +1087,10 @@ async def _ensure_logged_in(
             )
             if http_state == "ok":
                 _emit_login_probe(recorder, slot_alias, "http-only", http_state)
-                return "cookie_invalid"
+                return _cookie_invalid_or_driver_crash(main_page)
         return "cf_blocked"
 
-    return "cookie_invalid"
+    return _cookie_invalid_or_driver_crash(main_page)
 
 
 async def _browser_rejected_login_cookie(page, state: str) -> bool:
@@ -1041,25 +1130,39 @@ async def _check_logged_in(page) -> bool:
 
 async def _require_authenticated_login_proof(page, _slot_cookies: list[dict], candidate_state: str) -> str:
     """Require same-browser username, security page, and active Linux device proof."""
+    if candidate_state == "browser_driver_crashed" or _browser_driver_failed(page):
+        return "browser_driver_crashed"
     if candidate_state != "ok":
         return candidate_state
 
     username = await _extract_username(page)
+    if _browser_driver_failed(page):
+        return "browser_driver_crashed"
     if not username:
+        if not await _browser_driver_usable(page):
+            return "browser_driver_crashed"
         return "proof_failed"
 
     browser_security_state = await _probe_security_preferences_via_browser(page, username)
+    if _browser_driver_failed(page):
+        return "browser_driver_crashed"
     if browser_security_state in {"cf_blocked", "rate_limited"}:
         return browser_security_state
     if browser_security_state != "ok":
+        if not await _browser_driver_usable(page):
+            return "browser_driver_crashed"
         return "proof_failed"
 
     browser_device_state = await _probe_security_preferences_device_list_via_browser(page, username)
+    if _browser_driver_failed(page):
+        return "browser_driver_crashed"
     if browser_device_state == "ok":
         return "ok"
     if browser_device_state in {"cf_blocked", "rate_limited"}:
         return browser_device_state
     if browser_device_state == "unknown":
+        if not await _browser_driver_usable(page):
+            return "browser_driver_crashed"
         return "ok"
 
     return "proof_failed"
@@ -1093,6 +1196,8 @@ async def _wait_for_browser_login(page, *, timeout_seconds: int) -> str:
     while time.monotonic() < deadline:
         state = await _classify_browser_login_state(page)
         last_state = state
+        if state == "browser_driver_crashed":
+            return state
         if state == "ok":
             return state
         if state == "cookie_invalid":
@@ -1155,7 +1260,9 @@ async def _classify_browser_login_state(page) -> str:
                     return "cookie_invalid"
                 return browser_session_state
             return "unknown" if has_login_cookie else "cookie_invalid"
-    except Exception:
+    except Exception as exc:
+        if _mark_browser_driver_failure(page, exc):
+            return "browser_driver_crashed"
         return "unknown"
 
     return "unknown"
@@ -1164,7 +1271,8 @@ async def _classify_browser_login_state(page) -> str:
 async def _browser_has_login_cookie(page) -> bool:
     try:
         cookies = await page.context.cookies([_BASE_URL])
-    except Exception:
+    except Exception as exc:
+        _mark_browser_driver_failure(page, exc)
         return True
     return any(cookie.get("name") == "_t" for cookie in cookies)
 
