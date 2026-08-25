@@ -114,7 +114,7 @@ def test_watchdog_marks_cookie_state_uncertain_after_injection_hang(tmp_path):
 
     result = run_watchdog(
         command=_command(
-            "2026-08-21T00:00:00Z | INFO | slot-001 login-cookie-bootstrap started",
+            "2026-08-21T00:00:00Z | INFO | slot-001 login-cookie-injection started",
             sleep_seconds=30,
         ),
         output_dir=tmp_path,
@@ -137,7 +137,7 @@ def test_watchdog_bounds_cleanup_after_driver_crash(tmp_path):
 
     result = run_watchdog(
         command=_command(
-            "2026-08-21T00:00:00Z | INFO | slot-001 login-cookie-bootstrap started",
+            "2026-08-21T00:00:00Z | INFO | slot-001 login-auth-navigation started",
             "2026-08-21T00:00:01Z | ERROR | slot-001 browser-driver crashed BROWSER_DRIVER_CRASH",
             sleep_seconds=30,
         ),

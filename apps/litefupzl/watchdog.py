@@ -84,10 +84,22 @@ def _phase_update(line: str) -> tuple[str, str | None] | None:
         return "driver_crashed_cleanup", slot
     if "login-prewarm started" in message:
         return "login_prewarm", slot
-    if "login-cookie-bootstrap started" in message:
+    if "login-prewarm finished" in message:
+        return "login_prewarmed", slot
+    if (
+        "login-cookie-injection started" in message
+        or "login-cookie-bootstrap started" in message
+    ):
         return "cookie_injection_started", slot
-    if "login-cookie-bootstrap finished" in message:
+    if (
+        "login-cookie-injection finished" in message
+        or "login-cookie-bootstrap finished" in message
+    ):
         return "cookie_injected", slot
+    if "login-auth-navigation started" in message:
+        return "auth_navigation", slot
+    if "login-auth-navigation finished" in message:
+        return "auth_navigated", slot
     if "login-check ok" in message:
         return "authenticated_unsynced", slot
     if any(
@@ -229,6 +241,8 @@ def run_watchdog(
                 elif state.phase in {
                     "cookie_injection_started",
                     "cookie_injected",
+                    "auth_navigation",
+                    "auth_navigated",
                     "authenticated_unsynced",
                 }:
                     state.cookie_injection_started = True
@@ -239,8 +253,11 @@ def run_watchdog(
                 if state.phase in {
                     "driver_retry",
                     "login_prewarm",
+                    "login_prewarmed",
                     "cookie_injection_started",
                     "cookie_injected",
+                    "auth_navigation",
+                    "auth_navigated",
                 }:
                     deadline = now + pre_login_limit
                 elif state.phase == "authenticated_unsynced":

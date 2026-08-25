@@ -178,6 +178,8 @@ def test_actions_and_python_dependencies_are_immutable_in_workflows():
     lock_text = (ROOT / "requirements.lock").read_text(encoding="utf-8")
     assert "--hash=sha256:" in lock_text
     assert ">=" not in lock_text
+    assert "camoufox==0.5.5" in lock_text
+    assert "playwright==1.60.0" in lock_text
 
     for filename, job in [("oneshot.yml", "oneshot"), ("probes.yml", "probe")]:
         workflow = load_workflow(filename)
@@ -275,9 +277,19 @@ def test_manual_oneshot_supports_browser_and_runner_matrix_overrides():
     inputs = workflow[True]["workflow_dispatch"]["inputs"]
     assert inputs["browser_backend"]["options"] == ["configured", "camoufox", "firefox", "patchright-chromium"]
     assert inputs["runner_os"]["options"] == ["ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04"]
+    assert inputs["runner_os"]["default"] == "ubuntu-24.04"
     job = workflow["jobs"]["oneshot"]
     assert "inputs.runner_os" in job["runs-on"]
+    assert "'ubuntu-24.04'" in job["runs-on"]
     assert "inputs.browser_backend" in job["env"]["LITEFUPZL_BROWSER"]
+
+
+def test_scheduled_and_probe_jobs_pin_ubuntu_24_04():
+    oneshot = load_workflow("oneshot.yml")
+    probes = load_workflow("probes.yml")
+
+    assert "'ubuntu-24.04'" in oneshot["jobs"]["oneshot"]["runs-on"]
+    assert probes["jobs"]["probe"]["runs-on"] == "ubuntu-24.04"
 
 
 def test_oneshot_runs_through_hard_watchdog():

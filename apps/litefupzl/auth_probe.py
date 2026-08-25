@@ -27,17 +27,17 @@ from litefupzl.oneshot.env_loader import load_oneshot_env
 from litefupzl.oneshot.session import (
     _BASE_URL,
     _create_browser_context,
-    _extract_security_device_proof,
     _extract_username,
     _get_browser_user_agent,
     _normalize_cookie_dicts,
+    _normalize_security_device_probe_result,
+    _prewarm_and_replace_login_page,
     _probe_notifications_via_browser,
     _probe_private_preferences_via_browser,
     _probe_security_preferences_device_list_via_browser,
     _probe_security_preferences_via_browser,
     _probe_current_session_via_browser,
     _summarize_user_agent,
-    prime_cf_challenge,
 )
 
 
@@ -169,7 +169,10 @@ def _http_endpoint_probe(slot_cookies: list[dict], *, user_agent: str | None = N
     return output
 
 
-async def _browser_endpoint_probe(config, slot_cookies: list[dict]) -> dict:
+async def _browser_endpoint_probe(
+    config,
+    slot_cookies: list[dict],
+) -> tuple[dict, str | None]:
     temp_profile = Path(tempfile.mkdtemp(prefix="litefupzl-auth-probe-"))
     controller = context = page = json_page = None
     input_cookie_lookup = {
@@ -196,19 +199,19 @@ async def _browser_endpoint_probe(config, slot_cookies: list[dict]) -> dict:
         "security_preferences_fetch": None,
         "security_device_state": None,
         "security_device_probe": None,
-        "browser_user_agent": None,
         "browser_user_agent_summary": None,
     }
+    browser_user_agent = None
     try:
         controller, context, page, json_page = await _create_browser_context(
             temp_profile=temp_profile,
             config=config,
         )
         result["context_created"] = True
+        page, challenge_ready = await _prewarm_and_replace_login_page(context, page)
+        result["challenge_ready"] = challenge_ready
         browser_user_agent = await _get_browser_user_agent(page)
-        result["browser_user_agent"] = browser_user_agent
         result["browser_user_agent_summary"] = _summarize_user_agent(browser_user_agent)
-        result["challenge_ready"] = await prime_cf_challenge(page, _BASE_URL, timeout_seconds=60)
         await context.add_cookies(slot_cookies)
         try:
             visible_cookies = await context.cookies([_BASE_URL])
@@ -444,8 +447,15 @@ async def _browser_endpoint_probe(config, slot_cookies: list[dict]) -> dict:
             except Exception as exc:
                 result["security_preferences_fetch"] = {"error_type": type(exc).__name__}
             try:
-                result["security_device_state"] = await _probe_security_preferences_device_list_via_browser(page, username)
-                result["security_device_probe"] = await _extract_security_device_proof(page, username)
+                device_probe_result = await _probe_security_preferences_device_list_via_browser(
+                    page,
+                    username,
+                )
+                device_state, device_proof = _normalize_security_device_probe_result(
+                    device_probe_result
+                )
+                result["security_device_state"] = device_state
+                result["security_device_probe"] = device_proof
             except Exception as exc:
                 result["security_device_state"] = "unknown"
                 result["security_device_probe"] = {"error_type": type(exc).__name__}
@@ -471,7 +481,7 @@ async def _browser_endpoint_probe(config, slot_cookies: list[dict]) -> dict:
             except Exception:
                 pass
         shutil.rmtree(temp_profile, ignore_errors=True)
-    return result
+    return result, browser_user_agent
 
 
 def _is_auth_probe_success(browser_probe: dict) -> bool:
@@ -506,7 +516,7 @@ async def run_auth_probe() -> int:
         if cookie.get("name")
     )
 
-    browser_probe = await _browser_endpoint_probe(config, slot_cookies)
+    browser_probe, browser_user_agent = await _browser_endpoint_probe(config, slot_cookies)
     result = {
         "started_at": _now(),
         "browser": config.browser_name,
@@ -517,7 +527,7 @@ async def run_auth_probe() -> int:
         "browser_probe": browser_probe,
         "http": _http_endpoint_probe(
             slot_cookies,
-            user_agent=browser_probe.get("browser_user_agent"),
+            user_agent=browser_user_agent,
         ),
         "finished_at": _now(),
     }

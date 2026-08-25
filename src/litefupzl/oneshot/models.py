@@ -66,6 +66,18 @@ class SlotResult:
     username_observed: bool = False
     security_preferences_ok: bool = False
     security_device_ok: bool = False
+    security_current_device_ok: bool = False
+    current_device_row_count: int = 0
+    current_device_platform_linux_like: bool = False
+    current_device_platform_windows_like: bool = False
+    current_device_platform_macos_like: bool = False
+    current_device_platform_android_like: bool = False
+    current_device_platform_unknown: bool = False
+    current_device_browser_firefox_like: bool = False
+    current_device_browser_chromium_like: bool = False
+    current_device_browser_webkit_like: bool = False
+    current_device_browser_unknown: bool = False
+    # Deprecated observation-only compatibility field. Do not use for auth.
     active_linux_device_ok: bool = False
     same_context_login_proof_ok: bool = False
     browser_user_agent_linux_like: bool = False

@@ -30,6 +30,7 @@ from litefupzl.oneshot.session import (
     _ensure_logged_in,
     _ensure_topic_posts_ready,
     _normalize_cookie_dicts,
+    _prewarm_and_replace_login_page,
 )
 
 
@@ -229,6 +230,7 @@ async def run_probe() -> int:
             temp_profile=temp_profile,
             config=config,
         )
+        page, _ = await _prewarm_and_replace_login_page(context, page)
         login_state = await _ensure_logged_in(
             page,
             context,

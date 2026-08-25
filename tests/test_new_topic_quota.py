@@ -144,6 +144,9 @@ async def test_run_slot_counts_only_explicit_unseen_with_matching_timings_200(mo
     async def fake_create_browser_context(*, temp_profile, config):
         return _AsyncClosable(), _AsyncClosable(), page, _AsyncClosable()
 
+    async def fake_prewarm(_context, current_page, **_kwargs):
+        return current_page, True
+
     async def fake_safe_goto(_page, url, *args, **kwargs):
         topic_id = int(url.rsplit("/", 1)[-1])
         if topic_id != 2:
@@ -153,6 +156,7 @@ async def test_run_slot_counts_only_explicit_unseen_with_matching_timings_200(mo
         return True, None
 
     monkeypatch.setattr(session, "_create_browser_context", fake_create_browser_context)
+    monkeypatch.setattr(session, "_prewarm_and_replace_login_page", fake_prewarm)
     monkeypatch.setattr(session, "_get_browser_user_agent", lambda _page: asyncio.sleep(0, result="test-agent"))
     monkeypatch.setattr(session, "_ensure_logged_in", lambda *args, **kwargs: asyncio.sleep(0, result="ok"))
     monkeypatch.setattr(session, "_extract_username", lambda _page: asyncio.sleep(0, result="redacted-user"))

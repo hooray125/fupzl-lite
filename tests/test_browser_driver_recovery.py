@@ -21,6 +21,10 @@ class AsyncClosable:
         return None
 
 
+async def passthrough_prewarm(_context, page, **_kwargs):
+    return page, True
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -96,6 +100,7 @@ async def test_slot_driver_crash_is_runtime_error_not_cookie_invalid(monkeypatch
         return "browser_driver_crashed"
 
     monkeypatch.setattr(session, "_create_browser_context", fake_create_browser_context)
+    monkeypatch.setattr(session, "_prewarm_and_replace_login_page", passthrough_prewarm)
     monkeypatch.setattr(session, "attach_topics_timing_observer", lambda *args, **kwargs: None)
     monkeypatch.setattr(session, "_get_browser_user_agent", fake_user_agent)
     monkeypatch.setattr(session, "_ensure_logged_in", fake_login)
@@ -129,6 +134,7 @@ async def test_driver_crash_after_login_is_still_retryable_runtime_error(monkeyp
         raise RuntimeError("Target page, context or browser has been closed")
 
     monkeypatch.setattr(session, "_create_browser_context", fake_create_browser_context)
+    monkeypatch.setattr(session, "_prewarm_and_replace_login_page", passthrough_prewarm)
     monkeypatch.setattr(session, "attach_topics_timing_observer", lambda *args, **kwargs: None)
     monkeypatch.setattr(session, "_get_browser_user_agent", fake_user_agent)
     monkeypatch.setattr(session, "_ensure_logged_in", fake_login)
@@ -206,4 +212,37 @@ async def test_orchestrator_does_not_retry_confirmed_invalid_cookie(monkeypatch,
     monkeypatch.setattr(orchestrator, "load_oneshot_env", lambda: config)
 
     assert await orchestrator.run_oneshot(session_runner=fake_session) == 1
+    assert attempts == [1]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_does_not_retry_driver_crash_after_authenticated_proof(
+    monkeypatch,
+    tmp_path,
+):
+    from litefupzl.oneshot import orchestrator
+
+    config = SimpleNamespace(
+        cookies=["_t=redacted"],
+        duration_minutes=1,
+        output_dir=tmp_path,
+    )
+    attempts = []
+
+    async def fake_session(slot, _config, _recorder):
+        attempts.append(slot.slot_index)
+        return SlotResult(
+            slot_index=slot.slot_index,
+            slot_alias=slot.slot_alias,
+            started_at="2026-08-21T00:00:00+00:00",
+            finished_at="2026-08-21T00:00:01+00:00",
+            status=SlotStatus.RUNTIME_ERROR,
+            login_ok=True,
+            same_context_login_proof_ok=True,
+            warning_codes=[WarningCode.BROWSER_DRIVER_CRASH.value],
+        )
+
+    monkeypatch.setattr(orchestrator, "load_oneshot_env", lambda: config)
+
+    assert await orchestrator.run_oneshot(session_runner=fake_session) == 2
     assert attempts == [1]

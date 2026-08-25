@@ -9,15 +9,22 @@ write action is the bounded mutual-like pass described below.
 
 ## Features
 
-- Browser challenge prewarm and challenge handling before authenticated work.
+- Anonymous browser-challenge prewarm on a disposable page; authenticated
+  navigation starts on a fresh page with no inherited challenge frames.
 - Cookie login proof with authenticated browser-session checks.
+- Current-session device proof uses Discourse's dropdown-free auth-token row;
+  spoofed Windows/macOS/Linux labels are observation-only.
 - Read-only topic browsing with human-like scrolling and retry behavior.
 - Per-run never-read topic quota derived from a 30-day target.
 - Optional mutual-like pass for configured usernames.
 - Per-browser `/topics/timings` status diagnostics in redacted logs.
 - Default-on cookie refresh from the already-authenticated browser context; set it to `false` to disable write-back.
 - Manual and scheduled runs share the same cookie-refresh switch.
-- A Playwright browser-driver crash is classified separately from an invalid cookie and retried once with a fresh browser session.
+- Camoufox `0.5.5`, Playwright `1.60.0`, the Camoufox browser asset, its
+  SHA-256 digest, and the scheduled Ubuntu 24.04 runner are pinned.
+- A Playwright browser-driver crash is classified separately from an invalid
+  cookie and retried once only before authenticated proof; post-login crashes
+  are not blindly retried.
 - Scheduled oneshot runs use an OS-process watchdog so a wedged Playwright RPC cannot hold the job for hours.
 - A rotated durable cookie is synchronized from the final live browser context immediately before teardown, never from an early post-login candidate.
 - GitHub Actions run cleanup with recent-run retention.
@@ -66,8 +73,8 @@ python apps/litefupzl/cf_probe.py
 Authenticated diagnostics are manual tools. They can create a real browser
 session but do not persist a rotated production `_t`; the scheduled oneshot
 therefore never launches them automatically after a failure. The main runner
-retries only a classified browser-driver crash and does not retry a confirmed
-invalid cookie.
+retries only a classified pre-auth browser-driver crash; it does not retry a
+confirmed invalid cookie or a crash after authenticated proof.
 
 GitHub Actions launches `apps/litefupzl/watchdog.py`, which supervises the
 credentialed runner as a separate process group. The default hard limits are

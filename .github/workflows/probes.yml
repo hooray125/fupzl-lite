@@ -22,7 +22,7 @@ on:
 jobs:
   probe:
     if: inputs.probe != 'driver-matrix' && inputs.probe != 'watchdog-selftest'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     permissions:
       contents: read

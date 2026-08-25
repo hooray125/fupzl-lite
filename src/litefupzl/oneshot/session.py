@@ -274,6 +274,13 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
             timeout=_ONESHOT_BROWSER_STARTUP_TIMEOUT_SECONDS,
         )
         recorder.emit(slot.slot_alias, "browser", "ready")
+        recorder.emit(slot.slot_alias, "login-check", "started")
+        main_page, _ = await _prewarm_and_replace_login_page(
+            context,
+            main_page,
+            recorder=recorder,
+            slot_alias=slot.slot_alias,
+        )
         timings_tracker = TopicTimingsTracker()
         attach_topics_timing_observer(
             main_page,
@@ -287,7 +294,6 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
         result.browser_user_agent_linux_like = ua_summary["linux_like"]
         result.browser_user_agent_windows_like = ua_summary["windows_like"]
 
-        recorder.emit(slot.slot_alias, "login-check", "started")
         try:
             login_state = await asyncio.wait_for(
                 _ensure_logged_in(
@@ -367,7 +373,43 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
         result.security_preferences_ok = True
         recorder.emit(slot.slot_alias, "login-proof", "ok", code="SECURITY_PREFERENCES_OK", public=False)
 
-        device_state = await _probe_security_preferences_device_list_via_browser(main_page, username)
+        device_probe_result = await _probe_security_preferences_device_list_via_browser(
+            main_page,
+            username,
+        )
+        device_state, device_proof = _normalize_security_device_probe_result(
+            device_probe_result
+        )
+        result.current_device_row_count = int(
+            device_proof.get("current_device_row_count") or 0
+        )
+        result.current_device_platform_linux_like = bool(
+            device_proof.get("current_device_platform_linux_like")
+        )
+        result.current_device_platform_windows_like = bool(
+            device_proof.get("current_device_platform_windows_like")
+        )
+        result.current_device_platform_macos_like = bool(
+            device_proof.get("current_device_platform_macos_like")
+        )
+        result.current_device_platform_android_like = bool(
+            device_proof.get("current_device_platform_android_like")
+        )
+        result.current_device_platform_unknown = bool(
+            device_proof.get("current_device_platform_unknown")
+        )
+        result.current_device_browser_firefox_like = bool(
+            device_proof.get("current_device_browser_firefox_like")
+        )
+        result.current_device_browser_chromium_like = bool(
+            device_proof.get("current_device_browser_chromium_like")
+        )
+        result.current_device_browser_webkit_like = bool(
+            device_proof.get("current_device_browser_webkit_like")
+        )
+        result.current_device_browser_unknown = bool(
+            device_proof.get("current_device_browser_unknown")
+        )
         if device_state == "cf_blocked":
             result.status = SlotStatus.CF_BLOCKED
             result.cf_seen = True
@@ -382,19 +424,23 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
                 "login-device-proof",
                 "failed",
                 level="error",
-                code=f"ACTIVE_LINUX_DEVICE_{device_state.upper()}",
+                code="CURRENT_SESSION_DEVICE_COOKIE_INVALID",
                 public=False,
             )
             recorder.emit(slot.slot_alias, "login-check", "failed", level="error", code="LOGIN_CHECK_FAILED")
             return _finish_result(result)
         if device_state != "ok":
             result.warning_codes.append(WarningCode.LOGIN_DEVICE_PROOF_INCONCLUSIVE.value)
+            device_code = {
+                "missing": "CURRENT_SESSION_DEVICE_MISSING",
+                "ambiguous": "CURRENT_SESSION_DEVICE_AMBIGUOUS",
+            }.get(device_state, "CURRENT_SESSION_DEVICE_INCONCLUSIVE")
             recorder.emit(
                 slot.slot_alias,
                 "login-device-proof",
                 "warning",
                 level="warning",
-                code=f"ACTIVE_LINUX_DEVICE_{device_state.upper()}",
+                code=device_code,
                 public=False,
             )
             recorder.emit(
@@ -406,12 +452,15 @@ async def run_slot_session(slot: SlotConfig, config, recorder: PublicRecorder) -
             )
         else:
             result.security_device_ok = True
-            result.active_linux_device_ok = True
+            result.security_current_device_ok = True
+            # Deprecated compatibility field: it is observation-only and no
+            # longer determines login success under Camoufox spoofing.
+            result.active_linux_device_ok = result.current_device_platform_linux_like
 
         result.login_ok = True
         result.same_context_login_proof_ok = True
         if device_state == "ok":
-            recorder.emit(slot.slot_alias, "login-device-proof", "ok", code="ACTIVE_LINUX_DEVICE_OK", public=False)
+            recorder.emit(slot.slot_alias, "login-device-proof", "ok", code="CURRENT_SESSION_DEVICE_OK", public=False)
         recorder.emit(slot.slot_alias, "login-check", "ok")
 
         try:
@@ -817,11 +866,19 @@ async def _get_browser_user_agent(page) -> str | None:
 
 def _summarize_user_agent(user_agent: str | None) -> dict[str, bool]:
     lowered = (user_agent or "").lower()
+    firefox_like = "firefox" in lowered
+    chromium_like = "chrome" in lowered or "chromium" in lowered
+    webkit_like = "safari" in lowered or "webkit" in lowered
     return {
         "present": bool(lowered),
         "linux_like": "linux" in lowered or "x11" in lowered,
         "windows_like": "windows" in lowered or "win64" in lowered or "win32" in lowered,
+        "macos_like": "macintosh" in lowered or "mac os" in lowered,
         "android_like": "android" in lowered,
+        "firefox_like": firefox_like,
+        "chromium_like": chromium_like,
+        "webkit_like": webkit_like,
+        "browser_unknown": not (firefox_like or chromium_like or webkit_like),
     }
 
 
@@ -848,6 +905,36 @@ def _start_virtual_display_if_needed(config):
     return display
 
 
+async def _prewarm_and_replace_login_page(
+    context,
+    prewarm_page,
+    *,
+    recorder: PublicRecorder | None = None,
+    slot_alias: str | None = None,
+):
+    """Warm CF anonymously, then discard all challenge-frame page state."""
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-prewarm", "started")
+    try:
+        prewarm_ready = await prime_cf_challenge(
+            prewarm_page,
+            _BASE_URL,
+            timeout_seconds=60,
+        )
+    finally:
+        if recorder is not None and slot_alias is not None:
+            recorder.emit(slot_alias, "login-prewarm", "finished")
+
+    try:
+        await prewarm_page.close()
+        login_page = await context.new_page()
+    except Exception as exc:
+        _mark_browser_driver_failure(prewarm_page, exc)
+        raise
+    _attach_session_current_observer(login_page)
+    return login_page, prewarm_ready
+
+
 async def _ensure_logged_in(
     main_page,
     context,
@@ -860,15 +947,13 @@ async def _ensure_logged_in(
     slot_cookies = slot_cookies or _normalize_cookie_dicts(cookie_string)
     _attach_session_current_observer(main_page)
 
-    if recorder is not None and slot_alias is not None:
-        recorder.emit(slot_alias, "login-prewarm", "started")
-    await prime_cf_challenge(main_page, _BASE_URL, timeout_seconds=60)
-
-    if recorder is not None and slot_alias is not None:
-        recorder.emit(slot_alias, "login-cookie-bootstrap", "started")
-    browser_state = await _bootstrap_cookie_session(main_page, context, slot_cookies)
-    if recorder is not None and slot_alias is not None:
-        recorder.emit(slot_alias, "login-cookie-bootstrap", "finished")
+    browser_state = await _bootstrap_cookie_session(
+        main_page,
+        context,
+        slot_cookies,
+        recorder=recorder,
+        slot_alias=slot_alias,
+    )
     browser_state = await _require_authenticated_login_proof(main_page, slot_cookies, browser_state)
     if browser_state == "browser_driver_crashed":
         return browser_state
@@ -1122,7 +1207,7 @@ async def _check_logged_in(page) -> bool:
 
 
 async def _require_authenticated_login_proof(page, _slot_cookies: list[dict], candidate_state: str) -> str:
-    """Require same-browser username, security page, and active Linux device proof."""
+    """Require same-browser auth proof without trusting spoofable platform labels."""
     if candidate_state == "browser_driver_crashed" or _browser_driver_failed(page):
         return "browser_driver_crashed"
     if candidate_state != "ok":
@@ -1146,14 +1231,20 @@ async def _require_authenticated_login_proof(page, _slot_cookies: list[dict], ca
             return "browser_driver_crashed"
         return "proof_failed"
 
-    browser_device_state = await _probe_security_preferences_device_list_via_browser(page, username)
+    device_probe_result = await _probe_security_preferences_device_list_via_browser(
+        page,
+        username,
+    )
+    browser_device_state, _ = _normalize_security_device_probe_result(
+        device_probe_result
+    )
     if _browser_driver_failed(page):
         return "browser_driver_crashed"
     if browser_device_state == "ok":
         return "ok"
     if browser_device_state in {"cf_blocked", "rate_limited"}:
         return browser_device_state
-    if browser_device_state == "unknown":
+    if browser_device_state in {"unknown", "missing", "ambiguous"}:
         if not await _browser_driver_usable(page):
             return "browser_driver_crashed"
         return "ok"
@@ -1161,20 +1252,34 @@ async def _require_authenticated_login_proof(page, _slot_cookies: list[dict], ca
     return "proof_failed"
 
 
-async def _bootstrap_cookie_session(page, context, slot_cookies: list[dict]) -> str:
+async def _bootstrap_cookie_session(
+    page,
+    context,
+    slot_cookies: list[dict],
+    *,
+    recorder: PublicRecorder | None = None,
+    slot_alias: str | None = None,
+) -> str:
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-cookie-injection", "started")
+    try:
+        await context.add_cookies(slot_cookies)
+    except Exception as exc:
+        if _mark_browser_driver_failure(page, exc):
+            return "browser_driver_crashed"
+        return "unknown"
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-cookie-injection", "finished")
+
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-auth-navigation", "started")
     try:
         await safe_goto(page, _HOME_PROBE_URL, timeout=90_000)
-    except Exception:
-        pass
-
-    await context.add_cookies(slot_cookies)
-    try:
-        await safe_reload(page, timeout=90_000)
-    except Exception:
-        try:
-            await safe_goto(page, _HOME_PROBE_URL, timeout=90_000)
-        except Exception:
-            pass
+    except Exception as exc:
+        if _mark_browser_driver_failure(page, exc):
+            return "browser_driver_crashed"
+    if recorder is not None and slot_alias is not None:
+        recorder.emit(slot_alias, "login-auth-navigation", "finished")
 
     return await _wait_for_browser_login(page, timeout_seconds=20)
 
@@ -1579,8 +1684,8 @@ async def _probe_security_preferences_via_browser(page, username: str) -> str:
     return "unknown"
 
 
-async def _probe_security_preferences_device_list_via_browser(page, username: str) -> str:
-    """Verify rendered security page shows this browser as an active GNU/Linux device."""
+async def _probe_security_preferences_device_list_via_browser(page, username: str):
+    """Identify the current session row structurally, independent of spoofed OS labels."""
     try:
         await safe_goto(
             page,
@@ -1590,25 +1695,98 @@ async def _probe_security_preferences_device_list_via_browser(page, username: st
         await random_delay(1200, 2200)
         proof = await _extract_security_device_proof(page, username)
     except SessionFatalError:
-        return "cf_blocked"
+        return "cf_blocked", {}
     except (TimeoutError, Exception):
-        return "unknown"
+        return "unknown", {}
 
+    return _classify_security_device_proof(proof), proof
+
+
+def _normalize_security_device_probe_result(value) -> tuple[str, dict]:
+    """Accept the state/proof pair and legacy state-only test doubles."""
+    if isinstance(value, tuple) and len(value) == 2:
+        state, proof = value
+        return str(state), proof if isinstance(proof, dict) else {}
+    return str(value), {}
+
+
+def _classify_security_device_proof(proof: dict) -> str:
     if proof.get("cf_like"):
         return "cf_blocked"
     if proof.get("rate_limited_like"):
         return "rate_limited"
     if proof.get("logged_out_like"):
         return "cookie_invalid"
-    if (
+    if not (
         proof.get("security_preferences_path")
         and proof.get("username_path_ok")
         and proof.get("auth_tokens_section_present")
-        and proof.get("device_row_count", 0) > 0
-        and proof.get("linux_active_like_count", 0) > 0
     ):
-        return "ok"
-    return "unknown"
+        return "unknown"
+    device_row_count = max(0, int(proof.get("device_row_count") or 0))
+    current_row_count = max(0, int(proof.get("current_device_row_count") or 0))
+    if device_row_count == 0 or current_row_count == 0:
+        return "missing"
+    if current_row_count > 1:
+        return "ambiguous"
+    return "ok"
+
+
+def _sanitize_security_device_proof(proof: dict) -> dict:
+    """Keep only coarse flags/counts; discard device, UA, IP, and location text."""
+    boolean_fields = (
+        "security_preferences_path",
+        "username_path_ok",
+        "auth_tokens_section_present",
+        "current_device_platform_linux_like",
+        "current_device_platform_windows_like",
+        "current_device_platform_macos_like",
+        "current_device_platform_android_like",
+        "current_device_platform_unknown",
+        "current_device_browser_firefox_like",
+        "current_device_browser_chromium_like",
+        "current_device_browser_webkit_like",
+        "current_device_browser_unknown",
+        "logged_out_like",
+        "cf_like",
+        "rate_limited_like",
+    )
+    count_fields = (
+        "device_row_count",
+        "current_device_row_count",
+        "linux_row_count",
+        "linux_active_like_count",
+    )
+    row_boolean_fields = (
+        "has_dropdown",
+        "current_candidate",
+        "platform_linux_like",
+        "platform_windows_like",
+        "platform_macos_like",
+        "platform_android_like",
+        "platform_unknown",
+        "browser_firefox_like",
+        "browser_chromium_like",
+        "browser_webkit_like",
+        "browser_unknown",
+    )
+
+    sanitized = {field: proof.get(field) is True for field in boolean_fields}
+    for field in count_fields:
+        try:
+            sanitized[field] = max(0, int(proof.get(field) or 0))
+        except (TypeError, ValueError):
+            sanitized[field] = 0
+    rows = proof.get("row_summaries")
+    sanitized["row_summaries"] = [
+        {field: row.get(field) is True for field in row_boolean_fields}
+        for row in (rows if isinstance(rows, list) else [])[:8]
+        if isinstance(row, dict)
+    ]
+    error = proof.get("error")
+    if isinstance(error, str) and error.startswith("EXTRACT_SECURITY_DEVICE_PROOF_"):
+        sanitized["error"] = error
+    return sanitized
 
 
 async def _extract_security_device_proof(page, username: str) -> dict:
@@ -1625,60 +1803,49 @@ async def _extract_security_device_proof(page, username: str) -> dict:
                     ".auth-token"
                 ];
                 const rows = Array.from(document.querySelectorAll(rowSelectors.join(",")));
-                const activeMarkers = [
-                    "active", "current", "currently", "this device", "in use",
-                    "当前", "活跃", "活動", "正在", "使用中", "本设备", "此设备"
-                ];
-                const linuxMarkers = ["gnu/linux", "linux"];
                 const rowSummaries = rows.map((row) => {
                     const rowText = ((row.innerText || row.textContent || "")).toLowerCase();
-                    const classText = String(row.className || "").toLowerCase();
-                    const attrText = [
-                        row.getAttribute("aria-current"),
-                        row.getAttribute("data-current"),
-                        row.getAttribute("data-active"),
-                        row.getAttribute("title"),
-                        row.getAttribute("aria-label"),
-                        classText
-                    ].filter(Boolean).join(" ").toLowerCase();
-                    const hasLinux = linuxMarkers.some((marker) => rowText.includes(marker));
-                    const activeLike = activeMarkers.some((marker) => rowText.includes(marker) || attrText.includes(marker)) ||
-                        row.matches(".active,.current,.is-current,[aria-current='true'],[data-current='true'],[data-active='true']") ||
-                        !!row.querySelector(".active,.current,.is-current,[aria-current='true'],[data-current='true'],[data-active='true']");
+                    const hasDropdown = !!row.querySelector(".auth-token-dropdown");
+                    const platformLinux = rowText.includes("gnu/linux") || rowText.includes("linux");
+                    const platformWindows = rowText.includes("windows");
+                    const platformMacos = rowText.includes("mac os") || rowText.includes("macos") || rowText.includes("os x");
+                    const platformAndroid = rowText.includes("android");
+                    const browserFirefox = rowText.includes("firefox");
+                    const browserChromium = rowText.includes("chrome") || rowText.includes("chromium");
+                    const browserWebkit = rowText.includes("safari") || rowText.includes("webkit");
                     return {
-                        has_linux: hasLinux,
-                        has_windows: rowText.includes("windows"),
-                        has_macos: rowText.includes("mac os") || rowText.includes("macos") || rowText.includes("os x"),
-                        has_android: rowText.includes("android"),
-                        active_like: activeLike,
-                        recent_like: rowText.includes("just now") ||
-                            rowText.includes("moments ago") ||
-                            rowText.includes("less than a minute") ||
-                            rowText.includes("minute ago") ||
-                            rowText.includes("minutes ago") ||
-                            rowText.includes("刚刚") ||
-                            rowText.includes("分钟前") ||
-                            rowText.includes("分鐘前"),
-                        has_chrome: rowText.includes("chrome") || rowText.includes("chromium"),
-                        has_firefox: rowText.includes("firefox"),
-                        has_unknown_browser: rowText.includes("unknown") || rowText.includes("未知"),
-                        class_has_active: classText.includes("active") || classText.includes("current"),
-                        text_length: rowText.length
+                        has_dropdown: hasDropdown,
+                        current_candidate: !hasDropdown,
+                        platform_linux_like: platformLinux,
+                        platform_windows_like: platformWindows,
+                        platform_macos_like: platformMacos,
+                        platform_android_like: platformAndroid,
+                        platform_unknown: !(platformLinux || platformWindows || platformMacos || platformAndroid),
+                        browser_firefox_like: browserFirefox,
+                        browser_chromium_like: browserChromium,
+                        browser_webkit_like: browserWebkit,
+                        browser_unknown: !(browserFirefox || browserChromium || browserWebkit)
                     };
                 });
-                const linuxRowCount = rowSummaries.filter((row) => row.has_linux).length;
-                const activeLikeCount = rowSummaries.filter((row) => row.active_like).length;
-                const linuxActiveLikeCount = rowSummaries.filter((row) => row.has_linux && row.active_like).length;
-                const linuxRecentLikeCount = rowSummaries.filter((row) => row.has_linux && row.recent_like).length;
+                const currentRows = rowSummaries.filter((row) => row.current_candidate);
+                const currentHas = (field) => currentRows.some((row) => row[field]);
                 return {
                     security_preferences_path: url.includes("/preferences/security"),
                     username_path_ok: url.includes(`/u/${encodedUsername}/`) || url.includes(`/u/${username}/`),
                     auth_tokens_section_present: !!document.querySelector("[data-setting-name='user-auth-tokens'], .pref-auth-tokens, .auth-token"),
                     device_row_count: rows.length,
-                    linux_row_count: linuxRowCount,
-                    active_like_count: activeLikeCount,
-                    linux_active_like_count: linuxActiveLikeCount,
-                    linux_recent_like_count: linuxRecentLikeCount,
+                    current_device_row_count: currentRows.length,
+                    current_device_platform_linux_like: currentHas("platform_linux_like"),
+                    current_device_platform_windows_like: currentHas("platform_windows_like"),
+                    current_device_platform_macos_like: currentHas("platform_macos_like"),
+                    current_device_platform_android_like: currentHas("platform_android_like"),
+                    current_device_platform_unknown: currentHas("platform_unknown"),
+                    current_device_browser_firefox_like: currentHas("browser_firefox_like"),
+                    current_device_browser_chromium_like: currentHas("browser_chromium_like"),
+                    current_device_browser_webkit_like: currentHas("browser_webkit_like"),
+                    current_device_browser_unknown: currentHas("browser_unknown"),
+                    linux_row_count: rowSummaries.filter((row) => row.platform_linux_like).length,
+                    linux_active_like_count: currentRows.filter((row) => row.platform_linux_like).length,
                     row_summaries: rowSummaries.slice(0, 8),
                     logged_out_like: text.includes("login-button") ||
                         text.includes("auth-buttons") ||
@@ -1698,7 +1865,9 @@ async def _extract_security_device_proof(page, username: str) -> dict:
         )
     except Exception:
         return {"error": "EXTRACT_SECURITY_DEVICE_PROOF_FAILED"}
-    return proof if isinstance(proof, dict) else {"error": "EXTRACT_SECURITY_DEVICE_PROOF_INVALID"}
+    if not isinstance(proof, dict):
+        return {"error": "EXTRACT_SECURITY_DEVICE_PROOF_INVALID"}
+    return _sanitize_security_device_proof(proof)
 
 
 async def _extract_username_from_current_session(page) -> str | None:

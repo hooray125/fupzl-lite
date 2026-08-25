@@ -1,4 +1,14 @@
-from apps.litefupzl.fetch_camoufox import _authenticated_get
+from io import BytesIO
+
+import pytest
+
+from apps.litefupzl.fetch_camoufox import (
+    CAMOUFOX_BROWSER_SHA256,
+    CAMOUFOX_BROWSER_SPEC,
+    CAMOUFOX_BROWSER_VERSION,
+    _authenticated_get,
+    _verified_download,
+)
 
 
 def test_authenticated_camoufox_fetch_only_sends_token_to_github_api():
@@ -16,3 +26,23 @@ def test_authenticated_camoufox_fetch_only_sends_token_to_github_api():
     assert api_headers["Authorization"] == "Bearer redacted-token"
     assert api_headers["Accept"] == "application/vnd.github+json"
     assert "headers" not in calls[1][2]
+
+
+def test_camoufox_browser_asset_is_version_and_digest_pinned():
+    assert CAMOUFOX_BROWSER_SPEC == (
+        f"official/{CAMOUFOX_BROWSER_VERSION}-{CAMOUFOX_BROWSER_SHA256[:8]}"
+    )
+    assert len(CAMOUFOX_BROWSER_SHA256) == 64
+    int(CAMOUFOX_BROWSER_SHA256, 16)
+
+
+def test_verified_camoufox_download_rejects_payload_digest_mismatch():
+    def original_download(file, _url):
+        file.write(b"unexpected-browser-payload")
+        file.seek(0)
+        return file
+
+    download = _verified_download(original_download, "0" * 64)
+
+    with pytest.raises(RuntimeError, match="digest mismatch"):
+        download(BytesIO(), "https://example.invalid/browser.zip")

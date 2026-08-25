@@ -17,6 +17,16 @@ from litefupzl.oneshot.session import run_slot_session
 SessionRunner = Callable[[SlotConfig, object, PublicRecorder], Awaitable[SlotResult]]
 
 
+def _should_retry_driver_crash(result: SlotResult) -> bool:
+    """Retry only before authenticated work can have rotated durable cookies."""
+    return (
+        WarningCode.BROWSER_DRIVER_CRASH.value in result.warning_codes
+        and not result.login_ok
+        and not result.same_context_login_proof_ok
+        and not result.cookie_refresh_ok
+    )
+
+
 async def run_oneshot(*, session_runner: SessionRunner = run_slot_session) -> int:
     """Run the litefupzl oneshot flow and return process exit code."""
     config = load_oneshot_env()
@@ -52,7 +62,7 @@ async def run_oneshot(*, session_runner: SessionRunner = run_slot_session) -> in
                     )
                 if (
                     attempt == 0
-                    and WarningCode.BROWSER_DRIVER_CRASH.value in result.warning_codes
+                    and _should_retry_driver_crash(result)
                 ):
                     attempt += 1
                     recorder.emit(
